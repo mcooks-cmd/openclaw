@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { createStageTimingTracker } from "openclaw/plugin-sdk/time-runtime";
+import { isIncognitoSessionKey } from "../incognito-session.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import {
@@ -177,15 +178,18 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         : undefined;
     const hasLocalToolEnv = localToolEnv && Object.keys(localToolEnv).length > 0;
     shellPathPrepend = hasLocalToolEnv ? preparedEnvironment?.localToolPathPrepend : undefined;
-    shellEnvironment = hasLocalToolEnv
+    const processEnvironment = hasLocalToolEnv
       ? { ...baseShellEnvironment, ...localToolEnv }
       : baseShellEnvironment;
+    shellEnvironment = localGitHub
+      ? { ...processEnvironment, ...localGitHub.env }
+      : processEnvironment;
     // Tool lookup must not reject native login requests. Codex owns profile and
     // snapshot startup; only the identity restrictions above disable login.
-    return shellEnvironment
+    return processEnvironment
       ? {
           ...appServer,
-          start: { ...appServer.start, env: { ...appServer.start.env, ...shellEnvironment } },
+          start: { ...appServer.start, env: { ...appServer.start.env, ...processEnvironment } },
         }
       : appServer;
   };
@@ -248,9 +252,13 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
             assertCodexSessionRuntimeOwnership(binding, params.expectedSessionRuntimeOwnership)
         : undefined,
     });
+  let localGitHub: Awaited<
+    ReturnType<NonNullable<typeof params.hostCapabilities.prepareLocalGitHubEnvironment>>
+  >;
   const assertCurrent = () => {
     assertBindingCurrent();
     assertModelExecutionCurrent();
+    localGitHub?.assertCurrent();
   };
   let startupBinding = admittedBinding;
   preDynamicStartupStages.mark("read-binding");
@@ -527,6 +535,30 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     // Host capabilities are identity-keyed; carry generation proof separately.
     return {
       params,
+      prepareLocalGitHub: async () => {
+        if (
+          isIncognitoSessionKey(contextSessionKey) ||
+          sandbox?.enabled ||
+          remoteExec ||
+          appServer.start.transport !== "stdio" ||
+          appServer.remoteWorkspaceRoot ||
+          isCodexAppServerProxyLaunch(appServer.start.args) ||
+          usesSupervisionConnection
+        )
+          return undefined;
+        localGitHub ??= await params.hostCapabilities.prepareLocalGitHubEnvironment?.({
+          assertCurrent: () => {
+            assertBindingCurrent();
+            assertModelExecutionCurrent();
+          },
+          signal: runAbortController.signal,
+        });
+        return localGitHub;
+      },
+      releaseLocalGitHub: async () => {
+        await localGitHub?.dispose();
+      },
+      localGitHubInstructions: undefined as string | undefined,
       prepareInputAttachments: async (
         request: Omit<
           Parameters<NonNullable<typeof params.hostCapabilities.prepareInputAttachments>>[0],
@@ -630,6 +662,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     // The attempt owns this listener only after connection preparation returns.
     cancellation.dispose();
     releaseModelExecution();
+    await localGitHub?.dispose();
     throw error;
   }
 }

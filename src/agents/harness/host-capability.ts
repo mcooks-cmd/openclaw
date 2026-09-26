@@ -34,6 +34,7 @@ import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
+import { prepareLocalGitHubEnvironment } from "../github-local-environment.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import {
   attachInternalToolExecutionPreparer,
@@ -507,6 +508,15 @@ export function createAgentHarnessHostCapabilities(params: {
       assertActive();
       return preparedRunEnvironment;
     },
+    prepareLocalGitHubEnvironment: (request) =>
+      prepareLocalGitHubEnvironment({
+        admittedRunContext: attempt.admittedRunContext,
+        assertCurrent: () => {
+          assertActive();
+          request.assertCurrent();
+        },
+        signal: AbortSignal.any([request.signal, capabilityAbortController.signal]),
+      }),
     activeComputerContext: () => {
       assertActive();
       return buildActiveNodeContextText(requesterProfileId);

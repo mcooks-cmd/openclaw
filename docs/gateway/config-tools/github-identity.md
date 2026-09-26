@@ -9,6 +9,35 @@ title: "Configuration — GitHub identity for agent tools"
 
 `tools.github` selects the shared managed GitHub CLI identity used by agent execution, and defines which execution paths receive its credential.
 
+## Gateway-local GitHub App credentials
+
+When the existing Gateway App issuer is configured, authenticated local Codex
+native runs receive an isolated, owner-only `gh` profile containing a short-lived
+installation token. This includes main sessions without a repository workspace.
+The existing installation's repositories, permissions, and branch protections
+remain authoritative. No interactive login or shared system OAuth fallback is used.
+
+This opt-in path requires the admitted operator's canonical profile to contain
+exactly one trusted `github:<configured-host>:<account-id>` sign-in binding. The
+Gateway verifies that immutable ID through the configured GitHub API and supplies
+the resulting human login separately as `OPENCLAW_GITHUB_USER_LOGIN` and run
+instructions. The token's actor is the App installation; `@me` and `gh api user`
+must not be used to identify the requesting human.
+
+Incognito sessions do not receive this App grant: retained incognito threads
+cannot refresh the shell profile on every run. Ordinary incognito chat and its
+existing credential behavior are unchanged; no unused installation token is issued.
+
+The profile path and Git helper reach native commands through the per-run shell
+policy, never through the shared app-server process environment. App signing
+material and the Gateway bootstrap password are cleared from that command
+overlay. Existing execution approvals and current operator/session authority
+still apply. Cancellation, authority loss, token expiry, and run finalization
+revoke the token and remove the profile. Detached commands keep their existing
+process lifecycle but cannot retain this credential beyond the owning run.
+Removing the issuer configuration prevents subsequent grants; already-issued
+grants retain these same bounded cleanup and expiry rules.
+
 ## `tools.github`
 
 GitHub CLI identity is native by default. When `tools.github` is omitted, local agent tools, the Codex harness, and Agent Settings follow normal `gh` resolution: `GH_TOKEN` or `GITHUB_TOKEN` from the Gateway process takes precedence, followed by the runtime user's `gh` keyring/config. The Git author comes from the selected agent's workspace.
