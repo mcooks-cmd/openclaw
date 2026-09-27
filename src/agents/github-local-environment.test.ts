@@ -13,9 +13,16 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("./admitted-run-context.js", () => ({ readAdmittedRunOperatorAuthority: mocks.operator }));
 vi.mock("../state/user-profile-list.js", () => ({ prepareUserProfileIdentity: mocks.profile }));
-vi.mock("../gateway/worker-environments/worker-github-installation-token.js", () => ({
-  issueWorkerGitHubInstallationToken: mocks.issue,
-}));
+vi.mock("../gateway/worker-environments/worker-github-installation-token.js", async (load) => {
+  const actual =
+    await load<
+      typeof import("../gateway/worker-environments/worker-github-installation-token.js")
+    >();
+  return {
+    hasWorkerGitHubAppConfiguration: actual.hasWorkerGitHubAppConfiguration,
+    issueWorkerGitHubInstallationToken: mocks.issue,
+  };
+});
 
 const context = {} as AdmittedRunContext;
 const disposers: (() => Promise<void>)[] = [];
@@ -30,9 +37,9 @@ const prepare = async (signal = new AbortController().signal) => {
 };
 
 beforeEach(() => {
-  vi.stubEnv("OPENCLAW_GITHUB_APP_ID", "13361");
-  vi.stubEnv("OPENCLAW_GITHUB_HOST", "microsoft.ghe.com");
-  vi.stubEnv("OPENCLAW_GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
+  vi.stubEnv("GITHUB_APP_ID", "13361");
+  vi.stubEnv("GITHUB_HOST", "microsoft.ghe.com");
+  vi.stubEnv("GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
   mocks.operator.mockReturnValue({ profileId: "person-1", assertCurrent: () => {} });
   mocks.profile.mockImplementation(async () => ({
     emailBindingIds: ["binding-1"],
@@ -65,7 +72,7 @@ describe("local native GitHub environment", () => {
       GH_TOKEN: "",
       GH_ENTERPRISE_TOKEN: "",
       OPENCLAW_GATEWAY_PASSWORD: "",
-      OPENCLAW_GITHUB_APP_PRIVATE_KEY: "",
+      GITHUB_APP_PRIVATE_KEY: "",
       OPENCLAW_GITHUB_USER_LOGIN: "verified-person",
     });
     expect(JSON.stringify(first.env)).not.toContain("synthetic-installation-token");
@@ -96,9 +103,9 @@ describe("local native GitHub environment", () => {
     mocks.operator.mockReturnValue(undefined);
     expect(await prepare()).toBeUndefined();
     expect(mocks.issue).not.toHaveBeenCalled();
-    vi.stubEnv("OPENCLAW_GITHUB_APP_ID", "");
-    vi.stubEnv("OPENCLAW_GITHUB_INSTALLATION_ID", "");
-    vi.stubEnv("OPENCLAW_GITHUB_APP_PRIVATE_KEY", "");
+    vi.stubEnv("GITHUB_APP_ID", "");
+    vi.stubEnv("GITHUB_INSTALLATION_ID", "");
+    vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
     expect(await prepare()).toBeUndefined();
     expect(mocks.issue).not.toHaveBeenCalled();
   });

@@ -1,5 +1,8 @@
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
-import { issueWorkerGitHubInstallationToken } from "../gateway/worker-environments/worker-github-installation-token.js";
+import {
+  hasWorkerGitHubAppConfiguration,
+  issueWorkerGitHubInstallationToken,
+} from "../gateway/worker-environments/worker-github-installation-token.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/temp-download.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
@@ -19,14 +22,7 @@ export async function prepareLocalGitHubEnvironment(params: {
   assertCurrent: () => void;
   signal: AbortSignal;
 }) {
-  if (
-    ![
-      "OPENCLAW_GITHUB_APP_ID",
-      "OPENCLAW_GITHUB_INSTALLATION_ID",
-      "OPENCLAW_GITHUB_APP_PRIVATE_KEY",
-    ].some((name) => process.env[name])
-  )
-    return undefined;
+  if (!hasWorkerGitHubAppConfiguration()) return undefined;
   params.assertCurrent();
   const operator = readAdmittedRunOperatorAuthority(params.admittedRunContext);
   if (!operator) return undefined;
@@ -134,7 +130,7 @@ export async function prepareLocalGitHubEnvironment(params: {
         }),
         GH_HOST: host,
         OPENCLAW_GATEWAY_PASSWORD: "",
-        OPENCLAW_GITHUB_APP_PRIVATE_KEY: "",
+        GITHUB_APP_PRIVATE_KEY: "",
         GH_TOKEN: "",
         GH_ENTERPRISE_TOKEN: "",
         GITHUB_TOKEN: "",
