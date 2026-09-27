@@ -1,4 +1,5 @@
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasWorkerGitHubAppConfiguration,
   issueWorkerGitHubInstallationToken,
@@ -13,16 +14,30 @@ import {
 import { resolveGitHubApiBaseUrl, resolveGitHubHost } from "./github-host.js";
 import {
   managedGitHubIdentityEnvironment,
+  resolveConfiguredGitHubToolIdentity,
   writeManagedGitHubProfileFiles,
 } from "./github-tool-identity.js";
 
 /** A local native run owns its profile; the shared harness process never receives it. */
 export async function prepareLocalGitHubEnvironment(params: {
   admittedRunContext: AdmittedRunContext;
+  agentId?: string;
+  config?: OpenClawConfig;
   assertCurrent: () => void;
   signal: AbortSignal;
 }) {
   if (!hasWorkerGitHubAppConfiguration()) return undefined;
+  if (
+    params.agentId &&
+    params.config &&
+    resolveConfiguredGitHubToolIdentity({
+      config: params.config,
+      agentId: params.agentId,
+      scope: "agent",
+    })
+  ) {
+    return undefined;
+  }
   params.assertCurrent();
   const operator = readAdmittedRunOperatorAuthority(params.admittedRunContext);
   if (!operator) return undefined;

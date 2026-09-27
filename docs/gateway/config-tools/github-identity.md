@@ -15,7 +15,9 @@ When the existing Gateway App issuer is configured, authenticated local Codex
 native runs receive an isolated, owner-only `gh` profile containing a short-lived
 installation token. This includes main sessions without a repository workspace.
 The existing installation's repositories, permissions, and branch protections
-remain authoritative. No interactive login or shared system OAuth fallback is used.
+remain authoritative. An explicit per-agent `tools.github` override keeps its
+managed identity instead. No interactive login or shared system OAuth fallback
+is used for an App-backed run.
 
 This opt-in path requires the admitted operator's canonical profile to contain
 exactly one trusted `github:<configured-host>:<account-id>` sign-in binding. The

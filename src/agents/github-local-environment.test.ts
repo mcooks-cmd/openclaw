@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AdmittedRunContext } from "./admitted-run-context.js";
 import { prepareLocalGitHubEnvironment } from "./github-local-environment.js";
 
@@ -26,9 +27,11 @@ vi.mock("../gateway/worker-environments/worker-github-installation-token.js", as
 
 const context = {} as AdmittedRunContext;
 const disposers: (() => Promise<void>)[] = [];
-const prepare = async (signal = new AbortController().signal) => {
+const prepare = async (signal = new AbortController().signal, config: OpenClawConfig = {}) => {
   const result = await prepareLocalGitHubEnvironment({
     admittedRunContext: context,
+    agentId: "main",
+    config,
     assertCurrent: () => {},
     signal,
   });
@@ -107,6 +110,18 @@ describe("local native GitHub environment", () => {
     vi.stubEnv("GITHUB_INSTALLATION_ID", "");
     vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
     expect(await prepare()).toBeUndefined();
+    expect(mocks.issue).not.toHaveBeenCalled();
+  });
+
+  it("retains an explicit per-agent GitHub identity instead of issuing an App grant", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        entries: {
+          main: { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } },
+        },
+      },
+    };
+    expect(await prepare(new AbortController().signal, config)).toBeUndefined();
     expect(mocks.issue).not.toHaveBeenCalled();
   });
 
