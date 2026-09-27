@@ -44,13 +44,13 @@ const prepare = async (signal = new AbortController().signal, config: OpenClawCo
 
 beforeEach(() => {
   vi.stubEnv("GITHUB_APP_ID", "13361");
-  vi.stubEnv("GITHUB_HOST", "microsoft.ghe.com");
-  vi.stubEnv("GITHUB_API_BASE_URL", "https://api.microsoft.ghe.com");
+  vi.stubEnv("GITHUB_HOST", "fixture.ghe.com");
+  vi.stubEnv("GITHUB_API_BASE_URL", "https://api.fixture.ghe.com");
   mocks.operator.mockReturnValue({ profileId: "person-1", assertCurrent: () => {} });
   mocks.profile.mockImplementation(async () => ({
     emailBindingIds: ["binding-1"],
     release: vi.fn(),
-    readCurrentFacts: () => ({ profile: { emails: ["github:microsoft.ghe.com:123"] } }),
+    readCurrentFacts: () => ({ profile: { emails: ["github:fixture.ghe.com:123"] } }),
   }));
   mocks.issue.mockImplementation(async () => ({
     token: "synthetic-installation-token",
@@ -74,7 +74,7 @@ describe("local native GitHub environment", () => {
     const second = (await prepare())!;
     expect(first.env.GH_CONFIG_DIR).not.toBe(second.env.GH_CONFIG_DIR);
     expect(first.env).toMatchObject({
-      GH_HOST: "microsoft.ghe.com",
+      GH_HOST: "fixture.ghe.com",
       GH_TOKEN: "",
       GH_ENTERPRISE_TOKEN: "",
       OPENCLAW_GATEWAY_PASSWORD: "",
@@ -83,13 +83,13 @@ describe("local native GitHub environment", () => {
     });
     expect(JSON.stringify(first.env)).not.toContain("synthetic-installation-token");
     expect(mocks.fetch).toHaveBeenCalledWith(
-      "https://api.microsoft.ghe.com/user/123",
+      "https://api.fixture.ghe.com/user/123",
       expect.objectContaining({ redirect: "error" }),
     );
     const hosts = parse(
       await fs.readFile(path.join(first.env.GH_CONFIG_DIR!, "hosts.yml"), "utf8"),
     );
-    expect(hosts["microsoft.ghe.com"]).toMatchObject({
+    expect(hosts["fixture.ghe.com"]).toMatchObject({
       user: "x-access-token",
       oauth_token: "synthetic-installation-token",
     });

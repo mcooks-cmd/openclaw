@@ -46,7 +46,7 @@ describe("Codex native GitHub credential binding", () => {
     const dispose = vi.fn(async () => {});
     const env = {
       GH_CONFIG_DIR: "/private/run/github",
-      GH_HOST: "microsoft.ghe.com",
+      GH_HOST: "fixture.ghe.com",
       GH_TOKEN: "",
       GH_ENTERPRISE_TOKEN: "",
       GITHUB_TOKEN: "",
