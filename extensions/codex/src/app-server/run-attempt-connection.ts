@@ -544,8 +544,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
           appServer.remoteWorkspaceRoot ||
           isCodexAppServerProxyLaunch(appServer.start.args) ||
           usesSupervisionConnection
-        )
+        ) {
           return undefined;
+        }
         localGitHub ??= await params.hostCapabilities.prepareLocalGitHubEnvironment?.({
           assertCurrent: () => {
             assertBindingCurrent();
@@ -558,6 +559,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       releaseLocalGitHub: async () => {
         await localGitHub?.dispose();
       },
+      // SAFETY: native preparation may replace this initially absent run instruction.
       localGitHubInstructions: undefined as string | undefined,
       prepareInputAttachments: async (
         request: Omit<

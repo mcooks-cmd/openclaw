@@ -1,4 +1,5 @@
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasWorkerGitHubAppConfiguration,
@@ -26,7 +27,9 @@ export async function prepareLocalGitHubEnvironment(params: {
   assertCurrent: () => void;
   signal: AbortSignal;
 }) {
-  if (!hasWorkerGitHubAppConfiguration()) return undefined;
+  if (!hasWorkerGitHubAppConfiguration()) {
+    return undefined;
+  }
   if (
     params.agentId &&
     params.config &&
@@ -40,7 +43,9 @@ export async function prepareLocalGitHubEnvironment(params: {
   }
   params.assertCurrent();
   const operator = readAdmittedRunOperatorAuthority(params.admittedRunContext);
-  if (!operator) return undefined;
+  if (!operator) {
+    return undefined;
+  }
   operator.assertCurrent();
   const profile = await prepareUserProfileIdentity(operator.profileId);
   const signal = operator.signal
@@ -92,11 +97,14 @@ export async function prepareLocalGitHubEnvironment(params: {
       .readCurrentFacts(bindingIds)
       .profile.emails.filter((value) => value.startsWith(prefix))
       .map((value) => value.slice(prefix.length));
-    if (accounts.length !== 1 || !/^[1-9][0-9]*$/u.test(accounts[0]!)) {
+    const account = accounts[0];
+    if (accounts.length !== 1 || !account || !/^[1-9][0-9]*$/u.test(account)) {
       throw new Error("Local GitHub credentials require the signed-in GitHub account binding");
     }
-    const accountId = Number(accounts[0]);
-    if (!Number.isSafeInteger(accountId)) throw new Error("Invalid GitHub account binding");
+    const accountId = Number(account);
+    if (!Number.isSafeInteger(accountId)) {
+      throw new Error("Invalid GitHub account binding");
+    }
     grant = await issueWorkerGitHubInstallationToken({ signal });
     assertCurrent();
     if (!grant) {
@@ -113,10 +121,11 @@ export async function prepareLocalGitHubEnvironment(params: {
       throw new Error("The signed-in GitHub account could not be resolved");
     }
     const identity: unknown = await response.json();
-    const record =
-      identity && typeof identity === "object" ? (identity as Record<string, unknown>) : {};
+    const record = isRecord(identity) ? identity : {};
     const login = typeof record.login === "string" ? normalizeGitHubLogin(record.login) : undefined;
-    if (record.id !== accountId || !login) throw new Error("GitHub account identity did not match");
+    if (record.id !== accountId || !login) {
+      throw new Error("GitHub account identity did not match");
+    }
     assertCurrent();
     workspace = await tempWorkspace({
       rootDir: resolvePreferredOpenClawTmpDir(),

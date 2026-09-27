@@ -25,6 +25,7 @@ vi.mock("../gateway/worker-environments/worker-github-installation-token.js", as
   };
 });
 
+// SAFETY: the mocked admitted-run reader ignores this fixture's context fields.
 const context = {} as AdmittedRunContext;
 const disposers: (() => Promise<void>)[] = [];
 const prepare = async (signal = new AbortController().signal, config: OpenClawConfig = {}) => {
@@ -35,7 +36,9 @@ const prepare = async (signal = new AbortController().signal, config: OpenClawCo
     assertCurrent: () => {},
     signal,
   });
-  if (result) disposers.push(result.dispose);
+  if (result) {
+    disposers.push(result.dispose);
+  }
   return result;
 };
 
@@ -149,7 +152,9 @@ describe("local native GitHub environment", () => {
     mocks.operator.mockReturnValue({
       profileId: "person-1",
       assertCurrent: () => {
-        if (!current) throw new Error("authority ended");
+        if (!current) {
+          throw new Error("authority ended");
+        }
       },
     });
     const revoke = vi.fn();
