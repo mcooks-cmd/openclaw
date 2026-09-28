@@ -169,7 +169,7 @@ export async function prepareLocalGitHubEnvironment(params: {
         GH_PROMPT_DISABLED: "1",
         GH_NO_UPDATE_NOTIFIER: "1",
         GH_NO_EXTENSION_UPDATE_NOTIFIER: "1",
-        OPENCLAW_GITHUB_USER_LOGIN: login,
+        GITHUB_USER_LOGIN: login,
       },
     };
   } catch (error) {

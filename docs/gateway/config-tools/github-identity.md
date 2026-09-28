@@ -22,7 +22,7 @@ is used for an App-backed run.
 This opt-in path requires the admitted operator's canonical profile to contain
 exactly one trusted `github:<configured-host>:<account-id>` sign-in binding. The
 Gateway verifies that immutable ID through the configured GitHub API and supplies
-the resulting human login separately as `OPENCLAW_GITHUB_USER_LOGIN` and run
+the resulting human login separately as `GITHUB_USER_LOGIN` and run
 instructions. The token's actor is the App installation; `@me` and `gh api user`
 must not be used to identify the requesting human.
 

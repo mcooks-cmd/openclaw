@@ -53,7 +53,7 @@ describe("Codex native GitHub credential binding", () => {
       GITHUB_ENTERPRISE_TOKEN: "",
       OPENCLAW_GATEWAY_PASSWORD: "",
       GITHUB_APP_PRIVATE_KEY: "",
-      OPENCLAW_GITHUB_USER_LOGIN: "verified-person",
+      GITHUB_USER_LOGIN: "verified-person",
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_TERMINAL_PROMPT: "0",
@@ -87,7 +87,7 @@ describe("Codex native GitHub credential binding", () => {
         "GH_CONFIG_DIR",
         env.GH_CONFIG_DIR,
       );
-      expect(connection.appServer.start.env ?? {}).not.toHaveProperty("OPENCLAW_GITHUB_USER_LOGIN");
+      expect(connection.appServer.start.env ?? {}).not.toHaveProperty("GITHUB_USER_LOGIN");
       const policy = applyCodexManagedShellEnvironment(
         { shell_environment_policy: { set: { GH_CONFIG_DIR: "/stale", GH_TOKEN: "stale" } } },
         connection.shellEnvironment,

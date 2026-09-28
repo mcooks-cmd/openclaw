@@ -85,7 +85,7 @@ describe("local native GitHub environment", () => {
       GH_ENTERPRISE_TOKEN: "",
       OPENCLAW_GATEWAY_PASSWORD: "",
       GITHUB_APP_PRIVATE_KEY: "",
-      OPENCLAW_GITHUB_USER_LOGIN: "verified-person",
+      GITHUB_USER_LOGIN: "verified-person",
     });
     expect(JSON.stringify(first.env)).not.toContain("synthetic-installation-token");
     expect(mocks.fetch).toHaveBeenCalledWith(
