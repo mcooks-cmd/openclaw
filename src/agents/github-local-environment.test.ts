@@ -44,6 +44,8 @@ const prepare = async (signal = new AbortController().signal, config: OpenClawCo
 
 beforeEach(() => {
   vi.stubEnv("GITHUB_APP_ID", "13361");
+  vi.stubEnv("GITHUB_INSTALLATION_ID", "119386");
+  vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "synthetic-key");
   vi.stubEnv("GITHUB_HOST", "fixture.ghe.com");
   vi.stubEnv("GITHUB_API_BASE_URL", "https://api.fixture.ghe.com");
   mocks.operator.mockReturnValue({ profileId: "person-1", assertCurrent: () => {} });
@@ -72,6 +74,10 @@ describe("local native GitHub environment", () => {
   it("binds isolated enterprise profiles to the requesting user and cleans only the owning run", async () => {
     const first = (await prepare())!;
     const second = (await prepare())!;
+    expect(mocks.issue).toHaveBeenCalledWith({
+      host: "fixture.ghe.com",
+      signal: expect.any(AbortSignal),
+    });
     expect(first.env.GH_CONFIG_DIR).not.toBe(second.env.GH_CONFIG_DIR);
     expect(first.env).toMatchObject({
       GH_HOST: "fixture.ghe.com",

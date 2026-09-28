@@ -12,7 +12,7 @@ import {
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
 } from "./admitted-run-context.js";
-import { resolveGitHubApiBaseUrl, resolveGitHubHost } from "./github-host.js";
+import { resolveGitHubAppApiBaseUrl, resolveGitHubHost } from "./github-host.js";
 import {
   managedGitHubIdentityEnvironment,
   resolveConfiguredGitHubToolIdentity,
@@ -90,6 +90,7 @@ export async function prepareLocalGitHubEnvironment(params: {
     bindingIds = profile.emailBindingIds;
     assertCurrent();
     const host = resolveGitHubHost();
+    const apiBaseUrl = resolveGitHubAppApiBaseUrl(host);
     // Factory's authenticated proxy binds an immutable host/account principal to
     // this profile. Display names, commit email, and the App actor are not a user.
     const prefix = `github:${host}:`;
@@ -105,13 +106,16 @@ export async function prepareLocalGitHubEnvironment(params: {
     if (!Number.isSafeInteger(accountId)) {
       throw new Error("Invalid GitHub account binding");
     }
-    grant = await issueWorkerGitHubInstallationToken({ signal });
+    grant = await issueWorkerGitHubInstallationToken({ host, signal });
     assertCurrent();
     if (!grant) {
       await dispose();
       return undefined;
     }
-    const response = await fetch(`${resolveGitHubApiBaseUrl()}/user/${accountId}`, {
+    if (resolveGitHubAppApiBaseUrl(host) !== apiBaseUrl) {
+      throw new Error("Local GitHub App API changed during preparation");
+    }
+    const response = await fetch(`${apiBaseUrl}/user/${accountId}`, {
       redirect: "error",
       signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
       headers: { authorization: `Bearer ${grant.token}`, accept: "application/vnd.github+json" },
