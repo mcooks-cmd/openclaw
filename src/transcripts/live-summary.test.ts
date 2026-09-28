@@ -21,8 +21,8 @@ import { TranscriptsStore } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
 
 const { complete, select } = vi.hoisted(() => ({ complete: vi.fn(), select: vi.fn() }));
-vi.mock("./summary-model.runtime.js", () => ({
-  runIsolatedCompletion: complete,
+vi.mock("../agents/isolated-completion.js", () => ({ runIsolatedCompletion: complete }));
+vi.mock("../agents/simple-completion-selection.js", () => ({
   resolveSimpleCompletionSelectionForAgent: select,
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

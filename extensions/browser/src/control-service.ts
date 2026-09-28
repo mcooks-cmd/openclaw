@@ -11,6 +11,7 @@ import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-sou
 import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { ensureBrowserControlAuth } from "./browser/control-auth.js";
 import { getExtensionRelayModule } from "./browser/extension-relay.runtime.js";
+import { ensureExtensionRelayToken } from "./browser/extension-relay/relay-auth.js";
 import type { BrowserServerState } from "./browser/server-context.js";
 import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 
@@ -47,7 +48,6 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
     (profile) => profile.driver === "extension",
   );
   if (hasExtensionProfiles) {
-    const { ensureExtensionRelayToken } = await import("./browser/extension-relay/relay-auth.js");
     await ensureExtensionRelayToken();
   }
 

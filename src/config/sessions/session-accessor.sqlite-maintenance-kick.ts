@@ -7,6 +7,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-contract.js";
 import {
   adoptSessionEntryMaintenanceAgeFact,
   captureSessionEntryMaintenanceAgeFact,
@@ -21,7 +22,6 @@ import { createSessionMaintenancePlanningOperation } from "./session-accessor.sq
 import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
-  type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import { captureSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";

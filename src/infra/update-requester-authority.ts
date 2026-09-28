@@ -1,8 +1,6 @@
-import { isDeepStrictEqual } from "node:util";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { resolveInstallationTarget } from "./installation-target-context.js";
-import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 export type UpdateRequester = {
   channel?: string;
@@ -54,40 +52,6 @@ export async function prepareManagedUpdateRequesterIdentity(
   return Object.freeze({
     requester: identity.requester,
     isCurrentIdentity: identity.isCurrent,
-  });
-}
-
-/** Only a registered native continuation can settle the original Gateway's accepted update. */
-export async function createManagedUpdateRequesterContinuationAuthority(
-  requester: UpdateRequester,
-  operation: { runId: string; executor: UpdateRecoveryFence },
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<UpdateRequesterAuthority> {
-  const { runId, executor } = operation;
-  const admittedRequester = Object.freeze({ ...requester });
-  const authorityEnv = { ...env };
-  const { assertUpdateRequesterContinuationOwner } =
-    await import("../cli/update-cli/update-command-executor.js");
-  const assertOperationCurrent = () => assertUpdateRequesterContinuationOwner(executor, runId);
-  assertOperationCurrent();
-  const { getUpdateRun } = await import("./update-run-ledger.js");
-  assertOperationCurrent();
-  const run = getUpdateRun(runId, { env: authorityEnv });
-  if (
-    run?.status !== "running" ||
-    !isDeepStrictEqual(run.origin.requester, admittedRequester) ||
-    !admittedRequester.authorizationSource?.startsWith("profile:")
-  ) {
-    throw new UpdateRequesterRevokedError();
-  }
-  const identity = await prepareManagedUpdateRequesterIdentity(admittedRequester, authorityEnv);
-  assertOperationCurrent();
-  return Object.freeze({
-    requester: identity.requester,
-    isCurrent: () => {
-      assertOperationCurrent();
-      return identity.isCurrentIdentity();
-    },
   });
 }
 

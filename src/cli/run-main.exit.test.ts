@@ -145,9 +145,11 @@ const runTuiCliActionMock = vi.hoisted(() =>
   vi.fn<(target: string | undefined, opts: unknown) => Promise<void>>(async () => {}),
 );
 const probeGatewayConfiguredModelMock = vi.hoisted(() =>
-  vi.fn<typeof import("../commands/onboard-helpers.js").probeGatewayConfiguredModel>(async () => ({
-    kind: "configured",
-  })),
+  vi.fn<typeof import("../commands/onboard-gateway-model.runtime.js").probeGatewayConfiguredModel>(
+    async () => ({
+      kind: "configured",
+    }),
+  ),
 );
 const readActiveGatewayLockPortMock = vi.hoisted(() =>
   vi.fn(async (): Promise<number | undefined> => undefined),
@@ -421,7 +423,7 @@ vi.mock("../commands/onboard-remote-gateway.js", () => ({
   runRemoteGatewayInferenceOnboarding: runRemoteGatewayInferenceOnboardingMock,
 }));
 
-vi.mock("../commands/onboard-helpers.js", () => ({
+vi.mock("../commands/onboard-gateway-model.runtime.js", () => ({
   probeGatewayConfiguredModel: probeGatewayConfiguredModelMock,
 }));
 

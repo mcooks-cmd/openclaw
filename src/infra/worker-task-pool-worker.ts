@@ -1,4 +1,5 @@
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
+import { removeTemporaryArtifacts } from "./temp-artifact-removal.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
 import {
   createRetainedNativeWorker,
@@ -34,7 +35,6 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
       const releaseResources = slot.releaseResources;
       slot.releaseResources = async () => {
         try {
-          const { removeTemporaryArtifacts } = await import("./temp-artifact-cleanup.js");
           await removeTemporaryArtifacts(temporaryDirectory, "Worker task");
         } finally {
           await releaseResources?.();

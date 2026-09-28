@@ -242,7 +242,7 @@ const migratedSessionCompactManualTrimFiles = new Set([
 const migratedSessionLifecycleCleanupFiles = new Set([
   "src/config/sessions/cleanup-service.ts",
   "src/cron/session-reaper.ts",
-  "src/infra/heartbeat-runner.ts",
+  "src/infra/heartbeat-runner-execution.ts",
 ]);
 
 export const readOnlyGatewaySessionAccessorFiles = new Set([

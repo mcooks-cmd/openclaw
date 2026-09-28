@@ -11,7 +11,6 @@ import { GATEWAY_DAEMON_RUNTIME_OPTIONS, type GatewayDaemonRuntime } from "./dae
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 import { guardCancel } from "./onboard-helpers.js";
-import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 export type DaemonSetupOutcome = "succeeded" | "failed" | "skipped";
 
@@ -145,6 +144,7 @@ export async function maybeInstallDaemon(params: {
     }
   }
 
+  const { ensureSystemdUserLingerInteractive } = await import("./systemd-linger.js");
   await ensureSystemdUserLingerInteractive({
     runtime: params.runtime,
     prompter: {

@@ -9,7 +9,7 @@ import { WorkerTaskPool, type WorkerTaskResponse } from "./worker-task-pool.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
 const cleanup = vi.hoisted(() => vi.fn<() => Promise<void>>());
-vi.mock("./temp-artifact-cleanup.js", () => ({ removeTemporaryArtifacts: cleanup }));
+vi.mock("./temp-artifact-removal.js", () => ({ removeTemporaryArtifacts: cleanup }));
 
 const workerUrl = new URL("./worker-task-pool.test-support.ts", import.meta.url);
 

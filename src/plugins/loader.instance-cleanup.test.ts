@@ -19,11 +19,8 @@ import {
   type PluginCache,
 } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
-import {
-  clearActivePluginRegistry,
-  disposePluginRegistryInstances,
-  setActivePluginRegistry,
-} from "./runtime.js";
+import { disposePluginRegistryInstances, setActivePluginRegistry } from "./runtime.js";
+import { clearActivePluginRegistry } from "./runtime.test-support.js";
 
 it.each([true, false])(
   "keeps workflow admission through registration and retirement (activate: %s)",

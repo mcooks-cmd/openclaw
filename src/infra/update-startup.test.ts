@@ -180,7 +180,6 @@ describe("update-startup", () => {
   let runGatewayUpdateCheckOwner: (typeof import("./update-startup.js"))["runGatewayUpdateCheck"];
   let createGatewayUpdateCheck: (typeof import("./update-startup.js"))["createGatewayUpdateCheck"];
   let getUpdateAvailable: (typeof import("./update-status-state.js"))["getUpdateAvailable"];
-  let getUpdateEffectiveChannel: (typeof import("./update-startup.js"))["getUpdateEffectiveChannel"];
   let getUpdateSchedule: (typeof import("./update-status-state.js"))["getUpdateSchedule"];
   let refreshGatewayUpdateStatus: (typeof import("./update-status-schedule.js"))["refreshGatewayUpdateStatus"];
   let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
@@ -290,7 +289,6 @@ describe("update-startup", () => {
       ({
         runGatewayUpdateCheck: runGatewayUpdateCheckOwner,
         createGatewayUpdateCheck,
-        getUpdateEffectiveChannel,
         resetUpdateAvailableStateForTest,
       } = await import("./update-startup.js"));
       ({ refreshGatewayUpdateStatus } = await import("./update-status-schedule.js"));
@@ -344,43 +342,40 @@ describe("update-startup", () => {
     await testState.cleanup();
   });
 
-  it("exposes the installed-version channel before the schedule cache is ready", async () => {
-    versionMock.value = "2026.6.33";
-    mockPackageInstallStatus();
-
-    expect(getUpdateSchedule()).toBeNull();
-    await expect(getUpdateEffectiveChannel()).resolves.toBe("extended-stable");
-  });
-
   it("retries install identity initialization after a failed probe", async () => {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
     vi.mocked(checkUpdateStatus).mockRejectedValueOnce(new Error("probe failed"));
 
-    await expect(getUpdateEffectiveChannel()).rejects.toThrow("probe failed");
+    await expect(currentUpdateCheckLifecycle().initialize()).rejects.toThrow("probe failed");
 
     mockPackageInstallStatus();
-    await expect(getUpdateEffectiveChannel()).resolves.toBe("stable");
+    await expect(currentUpdateCheckLifecycle().initialize()).resolves.toMatchObject({
+      status: { installKind: "package" },
+    });
     expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
   });
 
   it("coalesces configless Git identity before the schedule cache is ready", async () => {
-    let releaseStatus: ((status: UpdateCheckResult) => void) | undefined;
+    const started = createDeferred();
+    const probe = createDeferred<UpdateCheckResult>();
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
-    vi.mocked(checkUpdateStatus).mockImplementationOnce(
-      () =>
-        new Promise<UpdateCheckResult>((resolve) => {
-          releaseStatus = resolve;
-        }),
-    );
+    vi.mocked(checkUpdateStatus).mockImplementationOnce(() => {
+      started.resolve();
+      return probe.promise;
+    });
 
-    const first = getUpdateEffectiveChannel();
-    const second = getUpdateEffectiveChannel();
-    await vi.advanceTimersByTimeAsync(0);
+    const first = currentUpdateCheckLifecycle().initialize();
+    const second = currentUpdateCheckLifecycle().initialize();
+    await started.promise;
     expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
-    releaseStatus?.(createDevGitStatus({ behind: 0, fetchOk: false }));
+    const status = createDevGitStatus({ behind: 0, fetchOk: false });
+    probe.resolve(status);
 
-    await expect(Promise.all([first, second])).resolves.toEqual(["dev", "dev"]);
-    await expect(getUpdateEffectiveChannel()).resolves.toBe("dev");
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ status }),
+      expect.objectContaining({ status }),
+    ]);
+    await expect(currentUpdateCheckLifecycle().initialize()).resolves.toMatchObject({ status });
     expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
   });
 
@@ -1053,7 +1048,9 @@ describe("update-startup", () => {
     });
 
     expect(getUpdateSchedule()?.channel).toBe("dev");
-    await expect(getUpdateEffectiveChannel()).resolves.toBe("dev");
+    await expect(currentUpdateCheckLifecycle().initialize()).resolves.toMatchObject({
+      status: { installKind: "git", git: { branch: "main" } },
+    });
   });
 
   it("skips all extended-stable work in Nix mode", async () => {
@@ -1641,7 +1638,9 @@ describe("update-startup", () => {
         await refreshing;
         await stopping;
         expect(getUpdateSchedule()).toBeNull();
-        await expect(getUpdateEffectiveChannel()).rejects.toMatchObject({ name: "AbortError" });
+        await expect(currentUpdateCheckLifecycle().initialize()).rejects.toMatchObject({
+          name: "AbortError",
+        });
         check.start();
         await vi.advanceTimersByTimeAsync(0);
         expect(checkUpdateStatus).toHaveBeenCalledTimes(2);

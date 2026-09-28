@@ -14,7 +14,6 @@ import { DEFAULT_GATEWAY_DAEMON_RUNTIME, isGatewayDaemonRuntime } from "../../da
 import { resolveGatewayInstallToken } from "../../gateway-install-token.js";
 import { resolveGatewaySetupRuntime } from "../../gateway-setup-runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
-import { ensureSystemdUserLingerNonInteractive } from "../../systemd-linger.js";
 
 /** Installs the managed gateway daemon when non-interactive setup requested it. */
 export async function installGatewayDaemonNonInteractive(params: {
@@ -104,6 +103,7 @@ export async function installGatewayDaemonNonInteractive(params: {
     runtime.log(gatewayInstallErrorHint());
     return { installed: false };
   }
+  const { ensureSystemdUserLingerNonInteractive } = await import("../../systemd-linger.js");
   await ensureSystemdUserLingerNonInteractive({ runtime });
   return { installed: true };
 }
