@@ -34,7 +34,6 @@ import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
-import { prepareLocalGitHubEnvironment } from "../github-local-environment.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import {
   attachInternalToolExecutionPreparer,
@@ -56,7 +55,7 @@ import {
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
-import { normalizeNativeOperationCwd, prepareAgentHarnessEnvironment } from "./host-environment.js";
+import { normalizeNativeOperationCwd, bindHarnessEnvironment } from "./host-environment.js";
 import { bindHarnessMedia } from "./host-media.js";
 import {
   registerAgentHarnessBeforeToolCallRetention,
@@ -322,7 +321,10 @@ export function createAgentHarnessHostCapabilities(params: {
         })
       : undefined;
   const skillsSnapshot = attempt.skillsSnapshot ? cloneSnapshot(attempt.skillsSnapshot) : undefined;
-  const preparedRunEnvironment = prepareAgentHarnessEnvironment({
+  const environment = bindHarnessEnvironment({
+    admittedRunContext: attempt.admittedRunContext,
+    assertActive,
+    signal: capabilityAbortController.signal,
     config,
     agentId: attempt.agentId,
     sessionKey: attempt.sessionKey,
@@ -504,21 +506,7 @@ export function createAgentHarnessHostCapabilities(params: {
           trajectory: bindHarnessTrajectory(trajectoryRecorder, assertActive),
         }
       : {}),
-    preparedEnvironment: () => {
-      assertActive();
-      return preparedRunEnvironment;
-    },
-    prepareLocalGitHubEnvironment: (request) =>
-      prepareLocalGitHubEnvironment({
-        admittedRunContext: attempt.admittedRunContext,
-        agentId: attempt.agentId,
-        config: attempt.config,
-        assertCurrent: () => {
-          assertActive();
-          request.assertCurrent();
-        },
-        signal: AbortSignal.any([request.signal, capabilityAbortController.signal]),
-      }),
+    ...environment,
     activeComputerContext: () => {
       assertActive();
       return buildActiveNodeContextText(requesterProfileId);

@@ -88,14 +88,14 @@ describe("prepared harness tool environment", () => {
     });
     try {
       const request = { assertCurrent: vi.fn(), signal: new AbortController().signal };
-      await host.hostCapabilities.prepareLocalGitHubEnvironment?.(request);
+      await host.hostCapabilities.prepareLocalCommandEnvironment?.(request);
       const captured = prepare.mock.calls[0]![0];
       expect(captured.admittedRunContext).toBe(host.admittedRunContext);
       expect(request.assertCurrent).toHaveBeenCalledOnce();
       host.closeHost();
       expect(captured.signal.aborted).toBe(true);
       expect(() => captured.assertCurrent()).toThrow("no longer active");
-      await expect(host.hostCapabilities.prepareLocalGitHubEnvironment?.(request)).rejects.toThrow(
+      await expect(host.hostCapabilities.prepareLocalCommandEnvironment?.(request)).rejects.toThrow(
         "no longer active",
       );
     } finally {

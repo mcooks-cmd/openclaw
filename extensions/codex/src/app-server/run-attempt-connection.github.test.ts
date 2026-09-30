@@ -24,7 +24,7 @@ describe("Codex native GitHub credential binding", () => {
       );
       params.hostCapabilities = {
         ...params.hostCapabilities,
-        prepareLocalGitHubEnvironment: prepare,
+        prepareLocalCommandEnvironment: prepare,
       };
       const connection = await prepareCodexAttemptConnection({
         params,
@@ -73,7 +73,7 @@ describe("Codex native GitHub credential binding", () => {
     );
     params.hostCapabilities = {
       ...params.hostCapabilities,
-      prepareLocalGitHubEnvironment: prepare,
+      prepareLocalCommandEnvironment: prepare,
     };
     const connection = await prepareCodexAttemptConnection({
       params,

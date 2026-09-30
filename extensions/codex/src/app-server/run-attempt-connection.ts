@@ -14,8 +14,8 @@ import {
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { createStageTimingTracker } from "openclaw/plugin-sdk/time-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import {
@@ -253,7 +253,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         : undefined,
     });
   let localGitHub: Awaited<
-    ReturnType<NonNullable<typeof params.hostCapabilities.prepareLocalGitHubEnvironment>>
+    ReturnType<NonNullable<typeof params.hostCapabilities.prepareLocalCommandEnvironment>>
   >;
   const assertCurrent = () => {
     assertBindingCurrent();
@@ -547,7 +547,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         ) {
           return undefined;
         }
-        localGitHub ??= await params.hostCapabilities.prepareLocalGitHubEnvironment?.({
+        localGitHub ??= await params.hostCapabilities.prepareLocalCommandEnvironment?.({
           assertCurrent: () => {
             assertBindingCurrent();
             assertModelExecutionCurrent();

@@ -15,8 +15,9 @@ When the existing Gateway App issuer is configured, authenticated local Codex
 native runs receive an isolated, owner-only `gh` profile containing a short-lived
 installation token. This includes main sessions without a repository workspace.
 The existing installation's repositories, permissions, and branch protections
-remain authoritative. An explicit per-agent `tools.github` override keeps its
-managed identity instead. No interactive login or shared system OAuth fallback
+remain authoritative. A configured System or per-agent `tools.github` identity keeps its
+managed identity instead. An unavailable trusted sign-in binding keeps unrelated
+native turns working with their existing environment. No interactive login or shared system OAuth fallback
 is used for an App-backed run.
 
 This opt-in path requires the admitted operator's canonical profile to contain
@@ -34,9 +35,15 @@ The profile path and Git helper reach native commands through the per-run shell
 policy, never through the shared app-server process environment. App signing
 material and the Gateway bootstrap password are cleared from that command
 overlay. Existing execution approvals and current operator/session authority
-still apply. Cancellation, authority loss, token expiry, and run finalization
-revoke the token and remove the profile. Detached commands keep their existing
-process lifecycle but cannot retain this credential beyond the owning run.
+still apply. The verified profile email supplies Git author and committer metadata. The token
+renews before expiry while the same run, operator, and binding remain current.
+Cancellation, profile binding removal, authority loss, exhausted renewal, and run
+finalization revoke the token and remove the profile; transient cleanup failures
+warn and can retry without changing a completed turn. Detached commands keep their existing
+process lifecycle; the App token closes with the owning run. This revokes the App
+grant, not independently configured native keyring credentials. As with ordinary
+native shell execution, use a dedicated OS user or sandbox for host-account
+isolation.
 Removing the issuer configuration prevents subsequent grants; already-issued
 grants retain these same bounded cleanup and expiry rules.
 
