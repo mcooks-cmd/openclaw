@@ -539,10 +539,11 @@ export function createAskUserTool(params: {
         }
         void cancelPendingQuestion("run-abort");
       };
-      const finishWait = async (result: QuestionWaitAnswerResult) => {
-        if (result.status === "pending") {
-          result = (await cancelPendingQuestion("wait-timeout")) ?? result;
-        }
+      const finishWait = async (waitResult: QuestionWaitAnswerResult) => {
+        const result =
+          waitResult.status === "pending"
+            ? ((await cancelPendingQuestion("wait-timeout")) ?? waitResult)
+            : waitResult;
         if (result.status === "answered") {
           return answeredResult(normalized.questions, result.answers);
         }

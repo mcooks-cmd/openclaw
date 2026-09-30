@@ -83,6 +83,7 @@ import { publishPreparedRuntimeAuthProfileStoreSnapshot } from "./runtime-snapsh
 import {
   clearRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
+  getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   getRuntimeAuthProfileStoreSnapshotRevision,
@@ -483,10 +484,10 @@ export function getPreparedRuntimeAuthProfileStoreSnapshot(
 }
 
 export { getRuntimeAuthProfileStoreSnapshotRevision };
-export {
-  clearRuntimeAuthProfileStoreSnapshotCore as clearRuntimeAuthProfileStoreSnapshot,
-  getRuntimeAuthProfileStoreSnapshotCore as getRuntimeAuthProfileStoreSnapshot,
-} from "./runtime-snapshots.js";
+export { clearRuntimeAuthProfileStoreSnapshotCore as clearRuntimeAuthProfileStoreSnapshot } from "./runtime-snapshots.js";
+export const getRuntimeAuthProfileStoreSnapshot: (
+  agentDir?: string,
+) => AuthProfileStore | undefined = getRuntimeAuthProfileStoreSnapshotCore;
 
 type AuthProfileStorePersistenceSnapshot = {
   owner: PreparedAuthProfileStoreOwner;
