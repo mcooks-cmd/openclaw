@@ -28,6 +28,8 @@ export type DurableComposerDraftScope = {
   scopeKey: string;
 };
 
+export type DurableChatDraftPresence = { revision: number; active: boolean };
+
 export type DurableQuestionDraft = {
   itemId: string;
   signature: string;
@@ -79,6 +81,24 @@ type DurableComposerDraftWriteResult =
   | { status: "storage-failed" };
 
 let lastFenceRevision = 0;
+const durableComposerDraftChangeListeners = new Set<() => void>();
+
+export function subscribeDurableComposerDraftChanges(listener: () => void): () => void {
+  durableComposerDraftChangeListeners.add(listener);
+  return () => {
+    durableComposerDraftChangeListeners.delete(listener);
+  };
+}
+
+function notifyDurableComposerDraftChanges(): void {
+  for (const listener of durableComposerDraftChangeListeners) {
+    try {
+      listener();
+    } catch (error) {
+      console.error("[openclaw] durable composer draft listener failed", error);
+    }
+  }
+}
 
 let sweptDatabase: IDBDatabase | null = null;
 async function openDraftDatabase(): Promise<IDBDatabase> {
@@ -231,11 +251,50 @@ function expiredRecord(
   return isActiveDraft(record) ? tombstone(record, now) : null;
 }
 
+export async function listDurableChatDraftPresence(
+  owner: Pick<DurableComposerDraftScope, "gatewayOwner" | "recoveryScope">,
+): Promise<
+  | { status: "ready"; presence: ReadonlyMap<string, DurableChatDraftPresence> }
+  | { status: "storage-failed" }
+> {
+  try {
+    const database = await openControlUiDatabase();
+    const transaction = database.transaction(STORE_NAME, "readonly");
+    const store = transaction.objectStore(STORE_NAME);
+    const values: unknown[] = await requestResult(store.index(OWNER_INDEX).getAll(ownerKey(owner)));
+    const presence = new Map<string, DurableChatDraftPresence>();
+    const now = Date.now();
+    for (const value of values) {
+      const record = parseStoredDraft(value);
+      if (
+        !record ||
+        record.gatewayOwner !== owner.gatewayOwner ||
+        record.recoveryScope !== owner.recoveryScope ||
+        !record.scopeKey.startsWith(CHAT_SCOPE_PREFIX)
+      ) {
+        continue;
+      }
+      presence.set(
+        record.scopeKey.slice(CHAT_SCOPE_PREFIX.length),
+        record.updatedAt > now - DRAFT_EXPIRY_MS
+          ? { revision: record.revision, active: isActiveDraft(record) }
+          : // Expiry will mint a newer clear fence on read; hide the pending clear now.
+            { revision: Number.MAX_SAFE_INTEGER, active: false },
+      );
+    }
+    await transactionComplete(transaction);
+    return { status: "ready", presence };
+  } catch {
+    return { status: "storage-failed" };
+  }
+}
+
 async function sweepExpiredRecords(database: IDBDatabase): Promise<void> {
   const transaction = database.transaction(STORE_NAME, "readwrite");
   const store = transaction.objectStore(STORE_NAME);
   const now = Date.now();
   const request = store.openCursor();
+  let changed = false;
   request.addEventListener("success", () => {
     try {
       const cursor = request.result;
@@ -246,8 +305,10 @@ async function sweepExpiredRecords(database: IDBDatabase): Promise<void> {
       const expired = record ? expiredRecord(record, now) : undefined;
       if (expired === null) {
         cursor.delete();
+        changed = true;
       } else if (expired) {
         cursor.update(expired);
+        changed = true;
       }
       cursor.continue();
     } catch {
@@ -255,6 +316,9 @@ async function sweepExpiredRecords(database: IDBDatabase): Promise<void> {
     }
   });
   await transactionComplete(transaction);
+  if (changed) {
+    notifyDurableComposerDraftChanges();
+  }
 }
 
 async function pruneOwnerRecords(
@@ -319,6 +383,7 @@ export async function prepareDurableComposerRecovery(
     const values: unknown[] = await requestResult(store.index(OWNER_INDEX).getAll(ownerKey(owner)));
     const records = values.map(parseStoredDraft).filter((record) => record !== null);
     const entries: DurableComposerRecoveryEntry[] = [];
+    let changed = false;
     let activeCount = records.filter(
       (record) => isActiveDraft(record) && !isLegacyChatDraft(record),
     ).length;
@@ -351,6 +416,7 @@ export async function prepareDurableComposerRecovery(
         retired.revision > record.revision
       ) {
         store.put(tombstone(record, Date.now()));
+        changed = true;
       } else if (
         identifiable &&
         activeCount < MAX_ACTIVE_DRAFTS_PER_OWNER &&
@@ -364,6 +430,7 @@ export async function prepareDurableComposerRecovery(
         });
         activeCount++;
         store.put(tombstone(record, Date.now()));
+        changed = true;
       } else {
         entries.push({
           scopeKey: record.scopeKey,
@@ -375,6 +442,9 @@ export async function prepareDurableComposerRecovery(
       }
     }
     await transactionComplete(transaction);
+    if (changed) {
+      notifyDurableComposerDraftChanges();
+    }
     return { status: "ready", entries };
   } catch {
     // A synchronous clone/validation error does not abort IndexedDB by itself.
@@ -433,6 +503,7 @@ export async function restoreDurableComposerRecovery(
     });
     store.put(tombstone(original, Date.now()));
     await transactionComplete(transaction);
+    notifyDurableComposerDraftChanges();
     return { status: "persisted", revision };
   } catch {
     // A synchronous clone/validation error does not abort IndexedDB by itself.
@@ -461,6 +532,9 @@ export async function readDurableComposerDraft(
         store.delete(recordKey(scope));
       }
       await transactionComplete(transaction);
+      if (value !== undefined) {
+        notifyDurableComposerDraftChanges();
+      }
       return { status: "not-found" };
     }
     if (
@@ -475,11 +549,13 @@ export async function readDurableComposerDraft(
     if (expired === null) {
       store.delete(record.key);
       await transactionComplete(transaction);
+      notifyDurableComposerDraftChanges();
       return { status: "not-found" };
     }
     if (expired) {
       store.put(expired);
       await transactionComplete(transaction);
+      notifyDurableComposerDraftChanges();
       return { status: "not-found", revision: expired.revision, writeId: expired.writeId };
     }
     await transactionComplete(transaction);
@@ -576,6 +652,7 @@ export async function writeDurableComposerDraft(
     store.put(record);
     await pruneOwnerRecords(store, record.ownerKey, now);
     await transactionComplete(transaction);
+    notifyDurableComposerDraftChanges();
     return { status: "persisted", revision: draft.revision, writeId: options.writeId };
   } catch {
     return { status: "storage-failed" };
@@ -605,6 +682,7 @@ export async function retireDurableComposerDraft(
     }
     await pruneOwnerRecords(store, ownerKey(scope), now);
     await transactionComplete(transaction);
+    notifyDurableComposerDraftChanges();
     return result;
   } catch {
     return { status: "storage-failed" };
@@ -674,6 +752,7 @@ export async function retireDurableComposerDrafts(
     }
     await pruneOwnerRecords(store, ownerKey(owner), now);
     await transactionComplete(transaction);
+    notifyDurableComposerDraftChanges();
     return "completed";
   } catch {
     return "storage-failed";

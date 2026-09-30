@@ -1,8 +1,13 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { resolveUiConversationIdentity } from "../sessions/session-key.ts";
 import { compareChatQueueOrder } from "./chat-queue-order.ts";
 import type { ChatQueueItem } from "./chat-types.ts";
-import { outboxPayloadMatchesOwner } from "./outbox-payload-store.runtime.ts";
+import type { DurableChatDraftPresence } from "./composer-draft-store.runtime.ts";
+import {
+  observeOutboxRecoveryOwner,
+  outboxPayloadMatchesOwner,
+} from "./outbox-payload-store.runtime.ts";
 import type { StoredComposerSession } from "./outbox-store-codec.ts";
 import type { StoredChatOutboxScope } from "./outbox-store-scope.ts";
 import {
@@ -18,24 +23,107 @@ import {
 
 export type StoredChatOutbox = StoredChatOutboxScope & { queue: ChatQueueItem[] };
 
+type StoredOutboxReaderScope = ChatComposerScope &
+  Required<Pick<ChatComposerScope, "client" | "connected">>;
+
 /** One reader per mounted consumer; canonical storage events retire its projection. */
 export function createStoredChatOutboxReader() {
   let cached: {
     inputs: readonly unknown[];
     summary: ReturnType<typeof summarizeStoredChatOutboxes>;
   } | null = null;
+  const listeners = new Set<() => void>();
+  let owner: { gatewayOwner: string; recoveryScope: string } | undefined;
+  let presence: ReadonlyMap<string, DurableChatDraftPresence> | undefined;
+  let generation = 0;
+  let stale = true;
+  let loading = false;
+  let durableStore: typeof import("./composer-draft-store.runtime.ts") | undefined;
+  let unsubscribeDurable: (() => void) | undefined;
+  let unsubscribeTab: (() => void) | undefined;
   const invalidate = () => {
     cached = null;
+  };
+  const notify = () => {
+    invalidate();
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[openclaw] stored outbox reader listener failed", error);
+      }
+    }
+  };
+  const markStale = () => {
+    generation += 1;
+    stale = true;
+  };
+  const loadPresence = async () => {
+    if (loading || !stale || !owner || !listeners.size) {
+      return;
+    }
+    loading = true;
+    const loadOwner = owner;
+    const loadGeneration = generation;
+    try {
+      durableStore ??= await import("./composer-draft-store.runtime.ts");
+      if (!listeners.size) {
+        return;
+      }
+      unsubscribeDurable ??= durableStore.subscribeDurableComposerDraftChanges(() => {
+        markStale();
+        void loadPresence();
+      });
+      if (loadGeneration !== generation) {
+        return;
+      }
+      const result = await durableStore.listDurableChatDraftPresence(loadOwner);
+      if (loadGeneration !== generation) {
+        return;
+      }
+      presence = result.status === "ready" ? result.presence : undefined;
+      stale = false;
+      notify();
+    } catch {
+      if (loadGeneration === generation) {
+        presence = undefined;
+        stale = false;
+        notify();
+      }
+    } finally {
+      loading = false;
+      void loadPresence();
+    }
   };
   return {
     invalidate,
     subscribe(listener: () => void) {
-      return subscribeStoredChatOutboxChanges(() => {
-        invalidate();
-        listener();
-      });
+      listeners.add(listener);
+      unsubscribeTab ??= subscribeStoredChatOutboxChanges(notify);
+      void loadPresence();
+      return () => {
+        listeners.delete(listener);
+        if (!listeners.size) {
+          unsubscribeTab?.();
+          unsubscribeTab = undefined;
+          unsubscribeDurable?.();
+          unsubscribeDurable = undefined;
+          // Changes while detached must be observed on the next subscription.
+          markStale();
+          presence = undefined;
+          invalidate();
+        }
+      };
     },
-    read(state: ChatComposerScope) {
+    read(state: StoredOutboxReaderScope) {
+      const gatewayOwner = storageTargetForGateway(state.settings?.gatewayUrl).gatewayOwner;
+      const recoveryScope = observeOutboxRecoveryOwner(state);
+      if (owner?.gatewayOwner !== gatewayOwner || owner?.recoveryScope !== recoveryScope) {
+        owner = recoveryScope ? { gatewayOwner, recoveryScope } : undefined;
+        presence = undefined;
+        markStale();
+      }
+      void loadPresence();
       const inputs = [
         state.settings?.gatewayUrl,
         state.assistantAgentId,
@@ -45,12 +133,13 @@ export function createStoredChatOutboxReader() {
         state.client?.recoveryScope,
         state.client?.recoveryScopeReady,
         state.connected,
+        presence,
       ];
       const previous = cached;
       if (previous && inputs.every((value, index) => Object.is(value, previous.inputs[index]))) {
         return previous.summary;
       }
-      const summary = summarizeStoredChatOutboxes(state);
+      const summary = summarizeStoredChatOutboxes(state, presence);
       cached = { inputs, summary };
       return summary;
     },
@@ -122,13 +211,19 @@ export function readStoredChatOutbox(
   );
 }
 
-function summarizeStoredChatOutboxes(state: ChatComposerScope) {
+function summarizeStoredChatOutboxes(
+  state: ChatComposerScope,
+  durablePresence?: ReadonlyMap<string, DurableChatDraftPresence>,
+) {
   const idsByScope = new Map<string, { all: Set<string>; attention: Set<string> }>();
-  const draftScopes = new Set<string>();
+  const drafts = new Map<string, DurableChatDraftPresence>();
   for (const { scope, session } of listStoredComposerRows(state)) {
     const scopeKey = storedChatOutboxScopeKey(scope);
-    if (session.draft) {
-      draftScopes.add(scopeKey);
+    if (!isIncognitoSessionKey(scope.sessionKey)) {
+      drafts.set(scopeKey, {
+        revision: session.draftRevision ?? 0,
+        active: Boolean(session.draft || session.goalMode || session.replyTarget),
+      });
     }
     const ids = idsByScope.get(scopeKey) ?? {
       all: new Set<string>(),
@@ -150,6 +245,16 @@ function summarizeStoredChatOutboxes(state: ChatComposerScope) {
       idsByScope.set(scopeKey, ids);
     }
   }
+  for (const [scopeKey, durable] of durablePresence ?? []) {
+    const scope = parseStoredChatOutboxScope(scopeKey);
+    if (
+      scope &&
+      !isIncognitoSessionKey(scope.sessionKey) &&
+      durable.revision >= (drafts.get(scopeKey)?.revision ?? 0)
+    ) {
+      drafts.set(scopeKey, durable);
+    }
+  }
   const attentionCountsByScope = new Map<string, number>();
   let total = 0;
   for (const [scopeKey, ids] of idsByScope) {
@@ -165,6 +270,7 @@ function summarizeStoredChatOutboxes(state: ChatComposerScope) {
     total,
     attentionCountForSession: (sessionKey: string) =>
       attentionCountsByScope.get(sessionScopeKey(sessionKey)) ?? 0,
-    hasSessionDraft: (sessionKey: string) => draftScopes.has(sessionScopeKey(sessionKey)),
+    hasSessionDraft: (sessionKey: string) =>
+      Boolean(drafts.get(sessionScopeKey(sessionKey))?.active),
   };
 }
