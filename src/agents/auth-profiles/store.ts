@@ -81,10 +81,8 @@ import {
 } from "./runtime-snapshot-owner.js";
 import { publishPreparedRuntimeAuthProfileStoreSnapshot } from "./runtime-snapshot-publication.js";
 import {
-  clearRuntimeAuthProfileStoreSnapshotCore,
   clearRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
-  getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   getRuntimeAuthProfileStoreSnapshotRevision,
@@ -476,13 +474,6 @@ export {
   hasLocalAuthProfileStoreSource,
 } from "./source-check.js";
 
-/** Return the current runtime auth-profile snapshot for an agent dir. */
-export function getRuntimeAuthProfileStoreSnapshot(
-  agentDir?: string,
-): AuthProfileStore | undefined {
-  return getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-}
-
 /** Return the lifecycle-published effective auth store without persisted fallback reads. */
 export function getPreparedRuntimeAuthProfileStoreSnapshot(
   agentDir?: string,
@@ -492,11 +483,10 @@ export function getPreparedRuntimeAuthProfileStoreSnapshot(
 }
 
 export { getRuntimeAuthProfileStoreSnapshotRevision };
-
-/** Clear one runtime auth-profile snapshot. */
-export function clearRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
-  return clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
-}
+export {
+  clearRuntimeAuthProfileStoreSnapshotCore as clearRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore as getRuntimeAuthProfileStoreSnapshot,
+} from "./runtime-snapshots.js";
 
 type AuthProfileStorePersistenceSnapshot = {
   owner: PreparedAuthProfileStoreOwner;

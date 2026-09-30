@@ -541,10 +541,7 @@ export function createAskUserTool(params: {
       };
       const finishWait = async (result: QuestionWaitAnswerResult) => {
         if (result.status === "pending") {
-          const answered = await cancelPendingQuestion("wait-timeout");
-          if (answered) {
-            return answeredResult(normalized.questions, answered.answers);
-          }
+          result = (await cancelPendingQuestion("wait-timeout")) ?? result;
         }
         if (result.status === "answered") {
           return answeredResult(normalized.questions, result.answers);
