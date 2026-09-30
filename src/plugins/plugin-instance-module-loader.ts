@@ -19,6 +19,13 @@ import {
   preparePluginModuleLoaderRecovery,
   type PluginInstanceModuleLoaderParams,
 } from "./plugin-module-loader-recovery.js";
+import {
+  hasRetainedNativeEsmModule,
+  nativeEsmModuleIdentity,
+  readRetainedNativeEsmExport,
+  readRetainedNativeEsmModule,
+  retainNativeEsmModuleLoad,
+} from "./plugin-native-esm-identity.js";
 import { bindNativePluginInstanceModuleLoader } from "./plugin-native-module-loader.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { bindSharedPluginModuleLoader } from "./plugin-shared-module-loader.js";
@@ -64,6 +71,50 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       loader,
     });
     return;
+  }
+  // Installed native ESM keeps the evaluated module. Recapturing it allocates a
+  // new file URL, and Node retains that module job after the capture directory
+  // and its require cache are released.
+  const nativeEsmIdentity = nativeEsmModuleIdentity(params.source);
+  const retainedNativeEsm = nativeEsmIdentity
+    ? readRetainedNativeEsmModule(nativeEsmIdentity)
+    : undefined;
+  if (nativeEsmIdentity && retainedNativeEsm) {
+    if (
+      params.expectedSourceDigest !== undefined &&
+      retainedNativeEsm.sourceDigest !== params.expectedSourceDigest
+    ) {
+      throw new Error(
+        `Plugin ${params.instance.pluginId} source changed after installation; inspect it before reloading.`,
+      );
+    }
+    params.instance.sourceDigest = retainedNativeEsm.sourceDigest;
+    params.instance.bindModuleLoader(
+      (source) => {
+        if (!hasRetainedNativeEsmModule(retainedNativeEsm, source)) {
+          throw new Error(
+            `Plugin ${params.instance.pluginId} native ESM module ${source} was not evaluated with the retained module`,
+          );
+        }
+        return readRetainedNativeEsmExport(retainedNativeEsm, source);
+      },
+      (source) => hasRetainedNativeEsmModule(retainedNativeEsm, source),
+    );
+    return;
+  }
+  if (nativeEsmIdentity) {
+    const bindModuleLoader = params.instance.bindModuleLoader.bind(params.instance);
+    params.instance.bindModuleLoader = (load, hasSource) => {
+      bindModuleLoader(
+        retainNativeEsmModuleLoad(
+          nativeEsmIdentity,
+          params.source,
+          () => params.instance.sourceDigest,
+          load,
+        ),
+        hasSource,
+      );
+    };
   }
   const nativeHooks = typeof Module.registerHooks === "function";
   const sourceBuilds = new Map<string, ReturnType<typeof buildPluginTypeScriptSource>>();

@@ -431,9 +431,12 @@ the same plugin package. Standalone discovery keeps its own setup lifetime.
 Each worker retains the current plugin registration context for each loader
 workspace, shared by agents with matching configuration, environment, and plugin
 inventory. Alternating unchanged workspaces reuse their captured source; replacing
-one workspace does not evict another. Node retains native ESM module graphs until
-worker retirement even after their capture files are removed, so actual source or
-configuration revisions can still retain module memory during that lifetime. Agent
+one workspace does not evict another. An unchanged native ESM plugin entry keeps
+one module evaluation for that worker's lifetime, including across configuration
+revisions of the same installed source. A new capture path would be a module job
+Node cannot unload. CommonJS plugins still capture per generation and drop their
+require cache on release. Replacing that plugin's source is picked up when
+the catalog worker process restarts. Agent
 credentials and configured model facts travel with each request; catalog jobs do
 not rebuild the agent workspace. Discovery reuses the registrations already
 acquired by that context. The first catalog request prepares registrations for the

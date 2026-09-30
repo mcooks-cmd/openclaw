@@ -12,7 +12,11 @@ import {
   type PreparedModelCatalogWorkerTask,
   type PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.js";
-import { createCatalogFixture, PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
+import {
+  createCatalogFixture,
+  PLUGIN_ID,
+  PROVIDER_ID,
+} from "./prepared-model-catalog-worker.test-support.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
@@ -157,3 +161,168 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     await pool.close();
   }
 }, 300_000);
+
+const NATIVE_ESM_BUFFER_BYTES = 4 * 1024 * 1024;
+
+it("bounds catalog worker memory across repeated native ESM plugin generations", async () => {
+  const fixture = createCatalogFixture(makeTempDir, 0);
+  const cjsEntry = fixture.config.plugins.load.paths[0];
+  if (!cjsEntry) {
+    throw new Error("catalog fixture did not register a plugin entry");
+  }
+  const pluginDir = path.dirname(cjsEntry);
+  fs.rmSync(cjsEntry, { force: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({ name: PLUGIN_ID, type: "module" }),
+  );
+  const entry = path.join(pluginDir, "index.js");
+  fs.writeFileSync(
+    entry,
+    `import fs from "node:fs";
+const retained = new Uint8Array(${NATIVE_ESM_BUFFER_BYTES});
+retained[0] = 7;
+const state = globalThis[Symbol.for("openclaw.nativeEsmCatalogHeap")] ??= { evaluations: 0 };
+state.evaluations += 1;
+fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify({
+  evaluations: state.evaluations,
+  url: import.meta.url,
+  arrayBuffers: process.memoryUsage().arrayBuffers,
+  external: process.memoryUsage().external,
+}) + "\\n");
+export function register(api) {
+  if (retained[0] !== 7) throw new Error("retained native ESM buffer was collected");
+  api.registerProvider({
+    id: ${JSON.stringify(PROVIDER_ID)},
+    label: "Heap fixture",
+    auth: [],
+    catalog: { run() {
+      return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: [{ id: "heap-model", name: "Heap model" }] } };
+    } },
+  });
+}
+`,
+  );
+  const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+    configSchema?: { type?: string; properties?: Record<string, unknown> };
+  };
+  manifest.configSchema = {
+    type: "object",
+    ...manifest.configSchema,
+    properties: { ...manifest.configSchema?.properties, revision: { type: "number" } },
+  };
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  const baseConfig = {
+    ...fixture.config,
+    plugins: {
+      ...fixture.config.plugins,
+      load: { paths: [entry] },
+    },
+  };
+  const metadata = loadPluginMetadataSnapshot({
+    config: baseConfig,
+    env: fixture.env,
+    workspaceDir: fixture.workspaceDir,
+  });
+  const revisions = Array.from({ length: 6 }, (_, revision) =>
+    createPreparedModelCatalogWorkerInput({
+      agentFacts: {
+        input: {
+          agentId: "main",
+          agentDir: fixture.agentDir,
+          inheritedAuthDir: fixture.agentDir,
+          workspaceDir: fixture.workspaceDir,
+          config: {
+            ...baseConfig,
+            plugins: {
+              ...baseConfig.plugins,
+              entries: { [PLUGIN_ID]: { enabled: true, config: { revision } } },
+            },
+            models: {
+              providers: {
+                [PROVIDER_ID]: {
+                  baseUrl: `https://revision-${revision}.invalid/v1`,
+                  api: "openai-completions" as const,
+                  models: [],
+                },
+              },
+            },
+          },
+          env: fixture.env,
+        },
+        env: fixture.env,
+        authStore: { version: 1, profiles: {} },
+        credentials: {},
+        templateAuthStorage: AuthStorage.inMemory({}),
+        providerIds: [PROVIDER_ID],
+        configuredModelRefs: [],
+        configuredRuntimeModels: [],
+        runtimeCapabilityModels: [],
+        configuredGeneratedCatalogPluginIds: [],
+      },
+      pluginMetadataSnapshot: metadata,
+    }),
+  );
+  const pool = new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
+    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
+    maxWorkers: 1,
+    idleTimeoutMs: 0,
+    restartOnError: false,
+    workerOptions: {
+      resourceLimits: { maxOldGenerationSizeMb: 512 },
+      workerData: {
+        sourceCaptureDirectory: makeTempDir("openclaw-catalog-heap-captures-"),
+      },
+      env: fixture.env,
+    },
+  });
+  const samples: Array<{ evaluations: number; arrayBuffers: number; url: string }> = [];
+  try {
+    for (let index = 0; index < revisions.length; index++) {
+      const result = await pool.run(
+        {
+          value: revisions[index]!,
+          request: {
+            kind: "catalog",
+            syntheticAuth: [],
+            clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
+          },
+        },
+        { timeoutMs: 60_000 },
+      );
+      if (result.status !== "ok") {
+        console.log(JSON.stringify(result));
+      }
+      expect(result.status).toBe("ok");
+      const rows = fs
+        .readFileSync(fixture.marker, "utf8")
+        .trim()
+        .split("\n")
+        .map(
+          (line) => JSON.parse(line) as { evaluations: number; url: string; arrayBuffers: number },
+        );
+      const latest = rows.at(-1)!;
+      samples.push({
+        evaluations: latest.evaluations,
+        arrayBuffers: latest.arrayBuffers,
+        url: latest.url,
+      });
+      console.log(
+        JSON.stringify({
+          revision: index,
+          evaluations: latest.evaluations,
+          arrayBuffers: latest.arrayBuffers,
+          url: latest.url,
+        }),
+      );
+    }
+  } finally {
+    await pool.close();
+  }
+  const growth = samples[samples.length - 1]!.arrayBuffers - samples[0]!.arrayBuffers;
+  // One native ESM evaluation owns the fixture buffer. Another copy per generation
+  // means Node kept each captured module URL after the generation was released.
+  expect(samples[samples.length - 1]!.evaluations).toBe(1);
+  expect(growth).toBeLessThan(NATIVE_ESM_BUFFER_BYTES);
+}, 180_000);
