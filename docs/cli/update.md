@@ -330,6 +330,10 @@ A different observed identity still refuses the
 handoff. Scheduled Tasks using `InteractiveToken` remain supported; this does not
 require storing a task password.
 
+Canceling while Windows task autostart is temporarily disabled lets recovery
+finish before the updater exits. Autostart is restored only while the original
+update still owns the task and the installation is safe to start.
+
 This target-CLI protection does not cover every Doctor or plugin child or the
 in-process service preparation before package mutation.
 
