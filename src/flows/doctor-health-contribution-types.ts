@@ -27,6 +27,8 @@ type DoctorConfigResult = {
   /** Store cleanup deferred until the repaired config reaches disk. */
   retiredAuthProfileCleanupPlans?: readonly RetiredAuthProfileCleanupPlan[];
   blockedCodexModelIdentities?: readonly string[];
+  /** Recoverable plugin-owned config repair failures recorded for update callers. */
+  warnings?: readonly string[];
   /** Ephemeral doctor-only auth rename plan; never part of persisted config. */
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;

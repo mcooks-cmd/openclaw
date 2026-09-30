@@ -152,6 +152,25 @@ describe("bundled channel legacy config migrations", () => {
     expect(result.changes).toEqual(["Normalized channels.slack via bundled doctor contract."]);
   });
 
+  it("preserves config when a bundled channel doctor normalizer throws", () => {
+    collectRelevantDoctorPluginIds.mockReturnValueOnce([]);
+    loadBundledChannelDoctorContractApi.mockReturnValue({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => {
+        cfg.mutated = true;
+        throw new Error("fixture repair failed");
+      },
+    });
+
+    const config = { channels: { slack: { streaming: true } } };
+    const result = applyChannelDoctorCompatibilityMigrations(config);
+
+    expect(config).toEqual({ channels: { slack: { streaming: true } } });
+    expect(result.next).toEqual(config);
+    expect(result.warnings).toEqual([
+      expect.stringContaining('Plugin "slack" config repair failed: fixture repair failed'),
+    ]);
+  });
+
   it("normalizes legacy private-network aliases exposed through bundled contract surfaces", () => {
     collectRelevantDoctorPluginIds.mockReturnValueOnce(["mattermost"]);
     loadBundledChannelDoctorContractApi.mockReturnValue(undefined);

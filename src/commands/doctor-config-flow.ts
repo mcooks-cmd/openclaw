@@ -220,6 +220,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
+  const configRepairWarnings: string[] = [];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     options: { fixHint: string; sanitize?: boolean; emitWarnings?: boolean },
@@ -227,6 +228,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     changesPanelSink.emit(mutation.changes, options.sanitize ? { sanitize: true } : {});
     if (options.emitWarnings && mutation.warnings?.length) {
       emitDoctorNotes({ note, warningNotes: mutation.warnings });
+      configRepairWarnings.push(...mutation.warnings);
     }
     state = applyDoctorConfigMutation({
       state,
@@ -673,6 +675,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
+    ...(configRepairWarnings.length ? { warnings: [...new Set(configRepairWarnings)] } : {}),
     ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),
     sourceConfigValid: snapshot.valid,
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
