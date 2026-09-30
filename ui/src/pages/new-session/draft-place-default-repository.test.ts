@@ -81,6 +81,48 @@ describe("DraftPlaceState configured repository defaults", () => {
     expect(configured.state.cloudProfileId).toBe("");
   });
 
+  it.each([true, false])(
+    "retires a saved previous-host repository with current default %s",
+    (hasDefault) => {
+      const configured = createRepositoryFixture();
+      configured.readPreference.mockReturnValue({
+        folder: "/workspace",
+        remoteProject: {
+          identity: "old/private",
+          cloneUrl: "https://old.ghe.example.test/old/private.git",
+        },
+        where: { kind: "local" },
+      });
+      vi.spyOn(configured.browser, "projectsReady", "get").mockReturnValue(true);
+      vi.spyOn(configured.browser, "githubHost", "get").mockReturnValue("new.ghe.example.test");
+      vi.spyOn(configured.browser, "defaultRemoteProject", "get").mockReturnValue(
+        hasDefault
+          ? {
+              identity: "new/private",
+              cloneUrl: "https://new.ghe.example.test/new/private.git",
+              defaultBranch: "main",
+            }
+          : null,
+      );
+      configured.state.adoptAgentDefaults();
+      configured.state.restorePreferenceSelections();
+      expect(configured.browser.remoteProject).toEqual(
+        hasDefault
+          ? {
+              identity: "new/private",
+              cloneUrl: "https://new.ghe.example.test/new/private.git",
+              defaultBranch: "main",
+            }
+          : null,
+      );
+      expect(configured.persistPreference).toHaveBeenCalledWith(
+        "main",
+        "/workspace",
+        expect.objectContaining({ remoteProject: null }),
+      );
+    },
+  );
+
   it("moves a saved configured repository from the Gateway onto its worker profile", () => {
     const configured = createRepositoryFixture();
     configured.readPreference.mockReturnValue({

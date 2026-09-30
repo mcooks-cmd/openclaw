@@ -9,7 +9,6 @@ import {
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
-import type {} from "./repository-project-source.schema.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 const PREPARED_POOL_PRESENCE_STATE_KEY = "cloudWorkers.preparedPool.humanPresenceDemand";

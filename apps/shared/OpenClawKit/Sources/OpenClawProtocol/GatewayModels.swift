@@ -12893,17 +12893,20 @@ public struct ProjectsListParams: Codable, Sendable {
 public struct ProjectsListResult: Codable, Sendable {
     public let projects: [ProjectsAddResult]
     public let defaultrepository: ProjectDefaultRepository?
+    public let githubhost: String?
     public let recents: [ProjectRecent]?
     public let observedprojects: [ProjectSummary]?
 
     public init(
         projects: [ProjectsAddResult],
         defaultrepository: ProjectDefaultRepository? = nil,
+        githubhost: String? = nil,
         recents: [ProjectRecent]? = nil,
         observedprojects: [ProjectSummary]? = nil)
     {
         self.projects = projects
         self.defaultrepository = defaultrepository
+        self.githubhost = githubhost
         self.recents = recents
         self.observedprojects = observedprojects
     }
@@ -12911,6 +12914,7 @@ public struct ProjectsListResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case projects
         case defaultrepository = "defaultRepository"
+        case githubhost = "githubHost"
         case recents
         case observedprojects = "observedProjects"
     }

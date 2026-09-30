@@ -155,6 +155,55 @@ test("projects.searchRemote binds native tokens to the host through final fetch"
   }
 });
 
+test.each(["revoked", "aborted"] as const)(
+  "registered projects.searchRemote refuses %s callers before credentialed I/O",
+  async (closed) => {
+    const cfg = {
+      gateway: {
+        github: { host: "a.ghe.example.test", apiBaseUrl: "https://a.ghe.example.test/api/v3" },
+        projects: { nativeGitHubSearch: true },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const controller = new AbortController();
+    let active = true;
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ items: [] }), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+    const native = vi
+      .spyOn(githubReadIdentity, "readCachedNativeGitHubToken")
+      .mockImplementation(async () => {
+        if (closed === "aborted") {
+          controller.abort();
+        } else {
+          active = false;
+        }
+        return "synthetic-host-a-token";
+      });
+    try {
+      const result = await invokeProjectMethod(
+        "projects.searchRemote",
+        { query: `closed-native-${closed}` },
+        cfg,
+        ["operator.write"],
+        undefined,
+        registeredProjectsHandlers,
+        undefined,
+        () => cfg,
+        { signal: controller.signal, hasCurrentClientAuthority: () => active },
+      );
+      expect(result).toMatchObject({ ok: false });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      native.mockRestore();
+    }
+  },
+);
+
 test("projects.searchRemote uses the opted-in native system GitHub identity", async () => {
   const token = vi
     .spyOn(githubReadIdentity, "readCachedNativeGitHubToken")
@@ -178,6 +227,8 @@ test("projects.searchRemote uses the opted-in native system GitHub identity", as
     expect(token).toHaveBeenCalledWith(process.env);
     expect(search).toHaveBeenCalledWith("acme/private-repo", {
       token: "native-system-token",
+      assertCurrent: expect.any(Function),
+      signal: undefined,
       host: "github.com",
       apiBaseUrl: "https://api.github.com",
     });
@@ -355,6 +406,7 @@ test("projects.list exposes checkout details only at write scope", async () => {
       expect(project).not.toHaveProperty("originUrl");
     }
     expect(readResult.payload).not.toHaveProperty("observedProjects");
+    expect(readResult.payload).not.toHaveProperty("githubHost");
     expect(listRegistryRecords).not.toHaveBeenCalled();
     expect(resolveRepositoryIdentity).not.toHaveBeenCalled();
 

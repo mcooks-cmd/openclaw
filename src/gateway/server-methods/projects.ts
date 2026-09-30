@@ -443,6 +443,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
             true,
             {
               projects,
+              ...(canCreateSession() ? { githubHost: resolveConfiguredGitHubHost(cfg) } : {}),
               ...(defaultRepository ? { defaultRepository } : {}),
               ...(recents ? { recents } : {}),
               ...(observedProjects ? { observedProjects } : {}),
@@ -459,6 +460,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
             projects: projects.map(({ id, displayName, source, agentId }) =>
               agentId ? { id, displayName, source, agentId } : { id, displayName, source },
             ),
+            ...(canCreateSession() ? { githubHost: resolveConfiguredGitHubHost(cfg) } : {}),
             ...(defaultRepository && canCreateSession() ? { defaultRepository } : {}),
             ...(recents ? { recents: recents.filter((recent) => recent.kind === "project") } : {}),
           },
@@ -547,7 +549,13 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
       }
     },
-    "projects.searchRemote": async ({ params, respond, context }) => {
+    "projects.searchRemote": async ({
+      params,
+      respond,
+      context,
+      signal,
+      hasCurrentClientAuthority,
+    }) => {
       if (
         !assertValidParams(
           params,
@@ -562,21 +570,32 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         const cfg = context.getRuntimeConfig();
         const host = resolveConfiguredGitHubHost(cfg);
         const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(cfg);
+        const assertCurrent = () => {
+          signal?.throwIfAborted();
+          if (hasCurrentClientAuthority?.() === false) {
+            throw new Error("Project requester authority changed during search");
+          }
+          if (context.getRuntimeConfig() !== cfg) {
+            throw new gitHubPublicApi.ControlUiGitHubError(
+              502,
+              "GitHub host changed during project search",
+            );
+          }
+        };
+        assertCurrent();
         const nativeToken =
           cfg.gateway?.projects?.nativeGitHubSearch === true
             ? await readCachedNativeGitHubToken(process.env)
             : undefined;
+        assertCurrent();
         const result = await searchRemoteProjects(params.query, {
+          assertCurrent,
+          signal,
           host,
           apiBaseUrl,
           ...(nativeToken === undefined ? {} : { token: nativeToken }),
         });
-        if (context.getRuntimeConfig() !== cfg) {
-          throw new gitHubPublicApi.ControlUiGitHubError(
-            502,
-            "GitHub host changed during project search",
-          );
-        }
+        assertCurrent();
         respond(true, result, undefined);
       } catch (error) {
         const { message, ...details } =

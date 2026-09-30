@@ -51,6 +51,7 @@ export async function invokeProjectMethod(
   handlers = projectsHandlers,
   projection?: SessionRowProjection,
   getConfig: () => OpenClawConfig = () => cfg as OpenClawConfig,
+  lifetime: { signal?: AbortSignal; hasCurrentClientAuthority?: () => boolean } = {},
 ) {
   const capture: {
     result: {
@@ -67,6 +68,7 @@ export async function invokeProjectMethod(
         ? await createSessionRowProjection({ cfg, modelCatalog: [] })
         : undefined;
     await handlers[method]!({
+      ...lifetime,
       req: {} as never,
       params,
       respond: (ok, payload, error) => {

@@ -169,12 +169,16 @@ export function searchRemoteProjects(
     token?: string;
     host?: string;
     apiBaseUrl?: string;
+    assertCurrent?: () => void;
+    signal?: AbortSignal;
   } = {},
 ): Promise<ProjectsSearchRemoteResult> {
   const config = getRuntimeConfigSnapshot();
   const host = options.host ?? resolveConfiguredGitHubHost(config);
   const apiBaseUrl = options.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl(config);
   const assertSelected = () => {
+    options.signal?.throwIfAborted();
+    options.assertCurrent?.();
     const current = getRuntimeConfigSnapshot();
     if (
       resolveConfiguredGitHubHost(current) !== host ||
@@ -211,7 +215,12 @@ export function searchRemoteProjects(
   const networkFetch = options.fetchImpl ?? fetch;
   const fetchImpl: typeof fetch = (input, init) => {
     assertSelected();
-    return networkFetch(input, init);
+    return networkFetch(input, {
+      ...init,
+      ...(options.signal
+        ? { signal: init?.signal ? AbortSignal.any([init.signal, options.signal]) : options.signal }
+        : {}),
+    });
   };
   const promise = searchProjectsUncached({
     query: query.trim(),

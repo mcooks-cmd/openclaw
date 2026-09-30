@@ -172,12 +172,21 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
     subscribe(listener) {
       listeners.add(listener);
       if (!unsubscribe) {
-        unsubscribe = gateway.subscribe(() => {
+        const unsubscribeGateway = gateway.subscribe(() => {
           if (synchronize()) {
             notify();
             void refresh();
           }
         });
+        const unsubscribeEvents = gateway.subscribeEvents((event) => {
+          if (event.event === "config.changed") {
+            void refresh(true);
+          }
+        });
+        unsubscribe = () => {
+          unsubscribeGateway();
+          unsubscribeEvents();
+        };
       }
       synchronize();
       if (!snapshot.ready) {

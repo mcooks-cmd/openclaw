@@ -134,6 +134,17 @@ export function restoreDraftPlacePreferences(params: {
   let changed = false;
   const preferredWhere = state.whereSelectedByUser ? null : state.preferredWhereRestore;
   const preferredProject = state.projectSelectedByUser ? "" : state.preferredProjectRestore;
+  const savedRemote = state.preferredRemoteProjectRestore;
+  if (savedRemote && browser.projectsReady && browser.githubHost) {
+    const url = URL.canParse(savedRemote.cloneUrl) ? new URL(savedRemote.cloneUrl) : undefined;
+    if (url?.hostname !== browser.githubHost) {
+      state.preferredRemoteProjectRestore = null;
+      state.configuredDefaultRepositoryPending =
+        !state.configuredDefaultRepositoryOptOut && !preferredProject;
+      persistPreference({ remoteProject: null });
+      changed = true;
+    }
+  }
   const configuredRemoteProject = browser.defaultRemoteProject;
   const configuredProfileId = browser.defaultRemoteProjectProfileId;
   const configuredProfile = configuredProfileId

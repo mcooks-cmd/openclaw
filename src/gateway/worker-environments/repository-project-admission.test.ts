@@ -32,7 +32,6 @@ vi.mock("./repository-git-pack.js", () => ({
 
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
-import type {} from "./repository-project-source.schema.js";
 
 const commit = "a".repeat(40);
 const rootTree = "b".repeat(40);

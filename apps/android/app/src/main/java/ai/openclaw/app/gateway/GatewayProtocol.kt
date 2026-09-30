@@ -180,6 +180,7 @@ data class WorkerDesktopLaunchResult(
 data class ProjectsListResult(
   val projects: List<ProjectsListResultProjectsItem>,
   val defaultRepository: ProjectsListResultDefaultRepository? = null,
+  val githubHost: String? = null,
   val recents: List<JsonElement>? = null,
   val observedProjects: List<ProjectsListResultObservedProjectsItem>? = null,
 )
