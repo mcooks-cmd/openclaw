@@ -150,6 +150,8 @@ with a verified backup and the managed Gateway stopped during replacement.
 Interrupting a fresh local update before activation records a failed,
 `interrupted` history entry while its installation owner is still held.
 An interrupted update is not a successful update or a verified rollback.
+On Windows, interruption during Scheduled Task suspension restores its original
+autostart setting before exiting, while retaining the update and task ownership checks.
 Unresolved effects remain visible in the update report. Unsupported pending
 checkpoint records block further mutable update work and remain unchanged.
 

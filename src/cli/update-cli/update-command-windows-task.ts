@@ -35,7 +35,7 @@ export type WindowsTaskAutoStartRecovery = {
 export function createWindowsTaskAutoStartRecovery(params: {
   serviceEnv: NodeJS.ProcessEnv;
   assertCurrentService?: () => Promise<void>;
-  assertCurrent?: () => void;
+  assertCurrent?: (phase?: "restore") => void;
   alreadySuspended?: true;
   updateRun?: UpdateCommandOptions["run"];
 }): WindowsTaskAutoStartRecovery {
@@ -50,10 +50,10 @@ export function createWindowsTaskAutoStartRecovery(params: {
   let interrupted = false;
   let unregisterSignalExitBarrier = () => {};
   let finishUpdate: (() => void) | undefined;
-  const assertCurrentService = async () => {
-    params.assertCurrent?.();
+  const assertCurrentService = async (phase?: "restore") => {
+    params.assertCurrent?.(phase);
     await guard?.();
-    params.assertCurrent?.();
+    params.assertCurrent?.(phase);
   };
   const updateFinished = new Promise<void>((resolve) => {
     finishUpdate = resolve;
@@ -84,6 +84,8 @@ export function createWindowsTaskAutoStartRecovery(params: {
     if (closed || delegated) {
       return Promise.resolve();
     }
+    // Explicit activation can enable a changed package and keeps its forward guard.
+    const phase = restartSafe === true ? undefined : "restore";
     if (restartSafe === true) {
       restoreAllowed = true;
     }
@@ -94,11 +96,11 @@ export function createWindowsTaskAutoStartRecovery(params: {
           return;
         }
         await resumeScheduledTaskAutoStartAfterUpdate(params.serviceEnv, {
-          assertCurrent: params.assertCurrent,
+          assertCurrent: () => params.assertCurrent?.(phase),
           beforeMutation: async () => {
-            params.assertCurrent?.();
-            await guard?.();
-            params.assertCurrent?.();
+            // Cancellation fences forward work, but the same live owner still
+            // compensates its task suspension before releasing signal exit.
+            await assertCurrentService(phase);
             // Repair cancellation fences activation, while compensation retains its service guard.
             assertCurrent?.();
             if (closed || !restoreAllowed) {
@@ -141,8 +143,8 @@ export function createWindowsTaskAutoStartRecovery(params: {
           (await suspensionPromise.catch(() => false))
         ) {
           await suspendScheduledTaskAutoStartForUpdate(params.serviceEnv, {
-            assertCurrent: params.assertCurrent,
-            beforeMutation: assertCurrentService,
+            assertCurrent: () => params.assertCurrent?.("restore"),
+            beforeMutation: () => assertCurrentService("restore"),
             // Failed verification removed the original safety proof. A timed-out
             // /DISABLE must never be compensated by enabling that installation.
             restoreOnFailure: false,
@@ -154,7 +156,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
       }
       try {
         if (finishUpdate && recordInterruption && params.updateRun) {
-          params.assertCurrent?.();
+          params.assertCurrent?.("restore");
           const failed = restorationFailed || !restartSafe;
           finishUpdateRun(
             params.updateRun.runId,
