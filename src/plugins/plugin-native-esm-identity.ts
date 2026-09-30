@@ -41,7 +41,7 @@ export function readRetainedNativeEsmModule(identity: string): RetainedNativeEsm
   return retained?.loaded ? retained : undefined;
 }
 
-/** Records every evaluation from the first generation and returns it for later generations. */
+/** Returns a module this worker already evaluated, and records the first evaluation of a new path. */
 export function retainNativeEsmModuleLoad(
   identity: string,
   entry: string,
@@ -71,20 +71,6 @@ export function retainNativeEsmModuleLoad(
   };
 }
 
-export function hasRetainedNativeEsmModule(
-  retained: RetainedNativeEsmModule,
-  source: string,
-): boolean {
-  return retained.modules.has(modulePathKey(source));
-}
-
-export function readRetainedNativeEsmExport(
-  retained: RetainedNativeEsmModule,
-  source: string,
-): unknown {
-  return retained.modules.get(modulePathKey(source));
-}
-
 function isCatalogWorker(): boolean {
   return (
     !isMainThread &&
@@ -100,8 +86,11 @@ function nearestPackageTypeIsModule(source: string): boolean {
     const manifestPath = path.join(directory, "package.json");
     if (fs.existsSync(manifestPath)) {
       try {
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { type?: unknown };
-        return manifest.type === "module";
+        const parsed: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+        if (typeof parsed !== "object" || parsed === null) {
+          return false;
+        }
+        return Object.getOwnPropertyDescriptor(parsed, "type")?.value === "module";
       } catch {
         return false;
       }

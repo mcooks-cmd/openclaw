@@ -20,9 +20,7 @@ import {
   type PluginInstanceModuleLoaderParams,
 } from "./plugin-module-loader-recovery.js";
 import {
-  hasRetainedNativeEsmModule,
   nativeEsmModuleIdentity,
-  readRetainedNativeEsmExport,
   readRetainedNativeEsmModule,
   retainNativeEsmModuleLoad,
 } from "./plugin-native-esm-identity.js";
@@ -37,6 +35,29 @@ import {
 } from "./plugin-source-build.js";
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
+
+type RetainedNativeEsmRuntime = {
+  execute: <T>(run: () => T) => T;
+  moduleSource: (filename: string) => string;
+};
+
+const retainedNativeEsmRuntimes = new Map<string, RetainedNativeEsmRuntime>();
+const retainedNativeEsmArtifacts = new Map<
+  string,
+  ReturnType<typeof capturePluginGenerationArtifact>
+>();
+
+function retainedNativeEsmRuntime(identity: string): RetainedNativeEsmRuntime {
+  let runtime = retainedNativeEsmRuntimes.get(identity);
+  if (!runtime) {
+    runtime = {
+      execute: (run) => run(),
+      moduleSource: (filename) => filename,
+    };
+    retainedNativeEsmRuntimes.set(identity, runtime);
+  }
+  return runtime;
+}
 
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
 export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoaderParams): void {
@@ -72,9 +93,10 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     });
     return;
   }
-  // Installed native ESM keeps the evaluated module. Recapturing it allocates a
-  // new file URL, and Node retains that module job after the capture directory
-  // and its require cache are released.
+  // The catalog worker keeps one capture for an unchanged native ESM entry.
+  // A new capture would be another module job Node cannot unload. Later
+  // generations install their own resolution hooks on that capture, so a
+  // module the first generation did not evaluate and a lazy import still resolve.
   const nativeEsmIdentity = nativeEsmModuleIdentity(params.source);
   const retainedNativeEsm = nativeEsmIdentity
     ? readRetainedNativeEsmModule(nativeEsmIdentity)
@@ -89,18 +111,6 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       );
     }
     params.instance.sourceDigest = retainedNativeEsm.sourceDigest;
-    params.instance.bindModuleLoader(
-      (source) => {
-        if (!hasRetainedNativeEsmModule(retainedNativeEsm, source)) {
-          throw new Error(
-            `Plugin ${params.instance.pluginId} native ESM module ${source} was not evaluated with the retained module`,
-          );
-        }
-        return readRetainedNativeEsmExport(retainedNativeEsm, source);
-      },
-      (source) => hasRetainedNativeEsmModule(retainedNativeEsm, source),
-    );
-    return;
   }
   if (nativeEsmIdentity) {
     const bindModuleLoader = params.instance.bindModuleLoader.bind(params.instance);
@@ -127,17 +137,36 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     }
     return { source: filename };
   };
-  const artifact = capturePluginGenerationArtifact(
-    params.rootDir,
-    params.standalone ? params.source : undefined,
-    (run) => params.instance.run(run),
-    (filename) => {
+  const nativeEsmRuntime = nativeEsmIdentity
+    ? retainedNativeEsmRuntime(nativeEsmIdentity)
+    : undefined;
+  if (nativeEsmRuntime) {
+    nativeEsmRuntime.execute = (run) => params.instance.run(run);
+    nativeEsmRuntime.moduleSource = (filename) => {
       const entry = sourceForOutput(filename);
       return entry.generated ? filename : entry.source;
-    },
-    params.nativeRecovery,
-  );
+    };
+  }
+  const reusedArtifact =
+    nativeEsmIdentity && retainedNativeEsm
+      ? retainedNativeEsmArtifacts.get(nativeEsmIdentity)
+      : undefined;
+  const artifact =
+    reusedArtifact ??
+    capturePluginGenerationArtifact(
+      params.rootDir,
+      params.standalone ? params.source : undefined,
+      nativeEsmRuntime ? (run) => nativeEsmRuntime.execute(run) : (run) => params.instance.run(run),
+      nativeEsmRuntime
+        ? (filename) => nativeEsmRuntime.moduleSource(filename)
+        : (filename) => {
+            const entry = sourceForOutput(filename);
+            return entry.generated ? filename : entry.source;
+          },
+      params.nativeRecovery,
+    );
   if (
+    !reusedArtifact &&
     params.expectedSourceDigest !== undefined &&
     artifact.sourceDigest !== params.expectedSourceDigest
   ) {
@@ -146,9 +175,20 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       `Plugin ${params.instance.pluginId} source changed after installation; inspect it before reloading.`,
     );
   }
+  if (nativeEsmIdentity && !reusedArtifact) {
+    retainedNativeEsmArtifacts.set(nativeEsmIdentity, artifact);
+  }
   bindPluginCacheRoot(params.rootDir, artifact.sourceRoot);
   params.instance.sourceDigest = artifact.sourceDigest;
-  params.instance.onModuleDispose(artifact.disposeAsync);
+  params.instance.onModuleDispose(() => {
+    if (nativeEsmIdentity && readRetainedNativeEsmModule(nativeEsmIdentity)) {
+      return;
+    }
+    if (nativeEsmIdentity) {
+      retainedNativeEsmArtifacts.delete(nativeEsmIdentity);
+    }
+    return artifact.disposeAsync();
+  });
   const bindModuleLoader = preparePluginModuleLoaderRecovery(
     params,
     artifact,
@@ -161,7 +201,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     pluginSdkResolution: params.pluginSdkResolution,
     devSourceRoot: params.devSourceRoot,
   });
-  if (aliases.packageRoot) {
+  if (aliases.packageRoot && !reusedArtifact) {
     artifact.linkHost(aliases.packageRoot);
   }
   installOpenClawPluginSdkNativeResolver({

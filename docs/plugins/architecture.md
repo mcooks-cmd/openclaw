@@ -433,10 +433,13 @@ workspace, shared by agents with matching configuration, environment, and plugin
 inventory. Alternating unchanged workspaces reuse their captured source; replacing
 one workspace does not evict another. An unchanged native ESM plugin entry keeps
 one module evaluation for that worker's lifetime, including across configuration
-revisions of the same installed source. A new capture path would be a module job
-Node cannot unload. CommonJS plugins still capture per generation and drop their
-require cache on release. Replacing that plugin's source is picked up when
-the catalog worker process restarts. Agent
+revisions of the same installed source. The worker keeps that first capture until
+the worker process exits, and each generation installs its own resolution hooks
+for it. A later generation can load a module the first generation did not
+evaluate, and a lazy import from the retained module still resolves. A new
+capture path would be a module job Node cannot unload. CommonJS plugins still
+capture per generation and drop their require cache on release. Replacing that
+plugin's source is picked up when the catalog worker process restarts. Agent
 credentials and configured model facts travel with each request; catalog jobs do
 not rebuild the agent workspace. Discovery reuses the registrations already
 acquired by that context. The first catalog request prepares registrations for the

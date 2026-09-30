@@ -1121,6 +1121,7 @@ src/plugins/plugin-module-loader-cache.ts
 src/plugins/plugin-module-loader-recovery.ts
 src/plugins/plugin-native-admission-state.ts
 src/plugins/plugin-native-admission.ts
+src/plugins/plugin-native-esm-identity.ts
 src/plugins/plugin-native-module-loader.ts
 src/plugins/plugin-native-namespace.ts
 src/plugins/plugin-native-reference.ts

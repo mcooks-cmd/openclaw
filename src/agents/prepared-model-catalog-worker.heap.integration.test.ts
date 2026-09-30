@@ -178,26 +178,62 @@ it("bounds catalog worker memory across repeated native ESM plugin generations",
   );
   const entry = path.join(pluginDir, "index.js");
   fs.writeFileSync(
+    path.join(pluginDir, "lazy.js"),
+    `const state = globalThis[Symbol.for("openclaw.nativeEsmCatalogLazy")] ??= { evaluations: 0 };
+state.evaluations += 1;
+export const modelId = "lazy-heap-model";
+export const evaluations = state.evaluations;
+`,
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "later.js"),
+    `const state = globalThis[Symbol.for("openclaw.nativeEsmCatalogLater")] ??= { evaluations: 0 };
+state.evaluations += 1;
+const lazy = await import("./lazy.js");
+export const modelId = lazy.modelId;
+export const evaluations = state.evaluations;
+export const lazyEvaluations = lazy.evaluations;
+`,
+  );
+  fs.writeFileSync(
     entry,
     `import fs from "node:fs";
 const retained = new Uint8Array(${NATIVE_ESM_BUFFER_BYTES});
 retained[0] = 7;
 const state = globalThis[Symbol.for("openclaw.nativeEsmCatalogHeap")] ??= { evaluations: 0 };
 state.evaluations += 1;
-fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify({
-  evaluations: state.evaluations,
-  url: import.meta.url,
-  arrayBuffers: process.memoryUsage().arrayBuffers,
-  external: process.memoryUsage().external,
-}) + "\\n");
+const pluginId = ${JSON.stringify(PLUGIN_ID)};
+function record(extra) {
+  fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify({
+    evaluations: state.evaluations,
+    url: import.meta.url,
+    arrayBuffers: process.memoryUsage().arrayBuffers,
+    external: process.memoryUsage().external,
+    ...extra,
+  }) + "\\n");
+}
+record({ phase: "evaluate" });
 export function register(api) {
   if (retained[0] !== 7) throw new Error("retained native ESM buffer was collected");
+  const revision = Number(api?.pluginConfig?.revision ?? 0);
+  record({ phase: "register", revision });
   api.registerProvider({
     id: ${JSON.stringify(PROVIDER_ID)},
     label: "Heap fixture",
     auth: [],
-    catalog: { run() {
-      return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: [{ id: "heap-model", name: "Heap model" }] } };
+    catalog: { async run(ctx) {
+      const ctxRevision = Number(ctx?.config?.plugins?.entries?.[pluginId]?.config?.revision ?? -1);
+      let modelId = "heap-model";
+      let laterEvaluations;
+      let lazyEvaluations;
+      if (revision >= 2) {
+        const later = await import("./later.js");
+        modelId = later.modelId;
+        laterEvaluations = later.evaluations;
+        lazyEvaluations = later.lazyEvaluations;
+      }
+      record({ phase: "catalog", revision, ctxRevision, modelId, laterEvaluations, lazyEvaluations });
+      return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: [{ id: modelId, name: "Heap model" }] } };
     } },
   });
 }
@@ -277,7 +313,16 @@ export function register(api) {
       env: fixture.env,
     },
   });
-  const samples: Array<{ evaluations: number; arrayBuffers: number; url: string }> = [];
+  const samples: Array<{
+    evaluations: number;
+    arrayBuffers: number;
+    url: string;
+    revision?: number;
+    modelId?: string;
+    laterEvaluations?: number;
+    lazyEvaluations?: number;
+    catalogModelIds: string[];
+  }> = [];
   try {
     for (let index = 0; index < revisions.length; index++) {
       const result = await pool.run(
@@ -295,25 +340,47 @@ export function register(api) {
         console.log(JSON.stringify(result));
       }
       expect(result.status).toBe("ok");
+      const catalogModelIds =
+        result.status === "ok" && result.kind === "catalog"
+          ? result.snapshot.entries.map((catalogEntry) => catalogEntry.id)
+          : [];
       const rows = fs
         .readFileSync(fixture.marker, "utf8")
         .trim()
         .split("\n")
         .map(
-          (line) => JSON.parse(line) as { evaluations: number; url: string; arrayBuffers: number },
+          (line) =>
+            JSON.parse(line) as {
+              evaluations: number;
+              url: string;
+              arrayBuffers: number;
+              phase?: string;
+              revision?: number;
+              modelId?: string;
+              laterEvaluations?: number;
+              lazyEvaluations?: number;
+            },
         );
       const latest = rows.at(-1)!;
       samples.push({
         evaluations: latest.evaluations,
         arrayBuffers: latest.arrayBuffers,
         url: latest.url,
+        revision: latest.revision,
+        modelId: latest.modelId,
+        laterEvaluations: latest.laterEvaluations,
+        lazyEvaluations: latest.lazyEvaluations,
+        catalogModelIds,
       });
       console.log(
         JSON.stringify({
           revision: index,
           evaluations: latest.evaluations,
           arrayBuffers: latest.arrayBuffers,
-          url: latest.url,
+          modelId: latest.modelId,
+          laterEvaluations: latest.laterEvaluations,
+          lazyEvaluations: latest.lazyEvaluations,
+          catalogModelIds,
         }),
       );
     }
@@ -324,5 +391,19 @@ export function register(api) {
   // One native ESM evaluation owns the fixture buffer. Another copy per generation
   // means Node kept each captured module URL after the generation was released.
   expect(samples[samples.length - 1]!.evaluations).toBe(1);
+  expect(samples[samples.length - 1]!.url).toBe(samples[0]!.url);
   expect(growth).toBeLessThan(NATIVE_ESM_BUFFER_BYTES);
+  const refreshed = samples.filter((sample) => (sample.revision ?? -1) >= 2);
+  expect(refreshed).toHaveLength(4);
+  for (const sample of refreshed) {
+    expect(sample.modelId).toBe("lazy-heap-model");
+    expect(sample.laterEvaluations).toBe(1);
+    expect(sample.lazyEvaluations).toBe(1);
+    expect(
+      sample.catalogModelIds.some(
+        (id) => id === "lazy-heap-model" || id.endsWith("/lazy-heap-model"),
+      ),
+      sample.catalogModelIds.join(","),
+    ).toBe(true);
+  }
 }, 180_000);
