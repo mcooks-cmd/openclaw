@@ -16,9 +16,16 @@ import {
   canonicalizePersistedUserMessageMedia,
   hasMeaningfulRetiredMediaCarrier,
 } from "../media/media-facts.js";
+import {
+  readRetainedAgentDeletions,
+  retainedAgentDeletionReadWarning,
+} from "../state/agent-deletion-journal.read.js";
 import { AGENT_MEDIA_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
-import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  listOpenClawRegisteredAgentDatabases,
+  registerOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
 import { assertOpenClawAgentSchemaContains } from "../state/openclaw-agent-db-schema-helpers.js";
 import {
   ensureOpenClawAgentDatabaseSchema,
@@ -49,6 +56,7 @@ import {
 } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import {
+  classifyRetainedAgentDatabaseHold,
   listTranscriptArchives,
   resolveAgentDatabaseMigrationTargets,
 } from "./state-migrations.media-persistence-targets.js";
@@ -57,6 +65,13 @@ import type { MigrationMessages } from "./state-migrations.types.js";
 const PREVIOUS_MEDIA_SCHEMA_VERSION = AGENT_MEDIA_SCHEMA_VERSION - 1;
 const ARCHIVE_TEMP_MARKER = ".media-retirement";
 const MEDIA_MIGRATION_ROW_BATCH_SIZE = 64;
+
+class RetainedAgentDatabaseHoldError extends Error {
+  constructor(readonly hold: { kind: "notice" | "silent" | "warning"; message: string }) {
+    super(hold.message);
+    this.name = "RetainedAgentDatabaseHoldError";
+  }
+}
 
 type MediaMigrationDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -622,12 +637,16 @@ export async function migrateLegacyMediaPersistence(
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   try {
     await withAgentDatabaseMaintenanceLease({ env }, async () => {
+      const retainedDeletions = readRetainedAgentDeletions(env);
       const targets = resolveAgentDatabaseMigrationTargets({
         changes,
         configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
         env,
+        notices,
+        retainedDeletions,
         warnings,
       });
       const seenPaths = new Set<string>();
@@ -635,24 +654,42 @@ export async function migrateLegacyMediaPersistence(
       const archiveDirectories = new Set<string>();
       for (const entry of targets) {
         const pathname = entry.path;
-        archiveDirectories.add(
-          resolveSqliteTranscriptArchiveDirectory({
-            agentId: entry.agentId,
-            path: pathname,
-          }),
-        );
         if (seenPaths.has(entry.realPath)) {
           continue;
         }
-        seenPaths.add(entry.realPath);
         try {
           const result = migrateAgentDatabase({
             agentId: entry.agentId,
-            beforeTransaction: params.hooks?.beforeDatabaseTransaction
-              ? () => params.hooks?.beforeDatabaseTransaction?.(pathname)
-              : undefined,
+            beforeTransaction: () => {
+              params.hooks?.beforeDatabaseTransaction?.(pathname);
+              const retainedDeletions = readRetainedAgentDeletions(env);
+              const retainedDeletionWarning = retainedAgentDeletionReadWarning(retainedDeletions);
+              if (retainedDeletionWarning && !warnings.includes(retainedDeletionWarning)) {
+                warnings.push(retainedDeletionWarning);
+              }
+              const hold = classifyRetainedAgentDatabaseHold({
+                candidate: entry,
+                configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
+                registeredAgentDatabases: listOpenClawRegisteredAgentDatabases({
+                  env,
+                  includeIncompatibleSchemaVersions: true,
+                }),
+                retainedDeletions,
+                env,
+              });
+              if (hold) {
+                throw new RetainedAgentDatabaseHoldError(hold);
+              }
+            },
             pathname,
           });
+          seenPaths.add(entry.realPath);
+          archiveDirectories.add(
+            resolveSqliteTranscriptArchiveDirectory({
+              agentId: entry.agentId,
+              path: pathname,
+            }),
+          );
           const schemaAdvanced = result.finalVersion > result.initialVersion;
           if (entry.source !== "registry" || schemaAdvanced) {
             registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
@@ -668,6 +705,16 @@ export async function migrateLegacyMediaPersistence(
             );
           }
         } catch (error) {
+          if (error instanceof RetainedAgentDatabaseHoldError) {
+            if (error.hold.kind === "silent") {
+              continue;
+            }
+            const messages = error.hold.kind === "notice" ? notices : warnings;
+            if (!messages.includes(error.hold.message)) {
+              messages.push(error.hold.message);
+            }
+            continue;
+          }
           databaseMigrationFailed = true;
           warnings.push(`Skipped agent database migration for ${pathname}: ${String(error)}`);
         }
@@ -717,5 +764,5 @@ export async function migrateLegacyMediaPersistence(
   } catch (error) {
     warnings.push(`Agent database maintenance deferred: ${String(error)}`);
   }
-  return { changes, warnings };
+  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
 }

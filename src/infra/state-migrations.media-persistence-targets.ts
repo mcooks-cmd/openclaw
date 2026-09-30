@@ -1,9 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../agents/session-dirs.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isSessionArchiveArtifactName } from "../config/sessions/artifacts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  readRetainedAgentDeletions,
+  retainedAgentDeletionHistoryUnavailable,
+  retainedAgentDeletionReadWarning,
+  type RetainedAgentDeletionDisposition,
+} from "../state/agent-deletion-journal.read.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
   isPersistentOpenClawAgentDatabasePath,
@@ -21,6 +28,65 @@ type AgentDatabaseMigrationTarget = {
 };
 
 type CandidateTarget = Omit<AgentDatabaseMigrationTarget, "realPath">;
+
+export function classifyRetainedAgentDatabaseHold(params: {
+  candidate: { agentId: string; path: string };
+  configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
+  registeredAgentDatabases: readonly { agentId: string; path: string }[];
+  retainedDeletions: RetainedAgentDeletionDisposition;
+  env: NodeJS.ProcessEnv;
+}): { kind: "notice" | "silent" | "warning"; message: string } | undefined {
+  const pathMatcher = createOpenClawAgentDatabasePathMatcher();
+  const sameDatabasePath = (left: string, right: string) => {
+    try {
+      return pathMatcher(left, right);
+    } catch {
+      return false;
+    }
+  };
+  const hasConfiguredOwner = (deletedAgentIds: ReadonlySet<string>) =>
+    params.configuredAgentDatabaseTargets.some(
+      (owner) =>
+        !deletedAgentIds.has(normalizeAgentId(owner.agentId)) &&
+        sameDatabasePath(owner.path, params.candidate.path),
+    );
+  if (retainedAgentDeletionHistoryUnavailable(params.retainedDeletions)) {
+    if (hasConfiguredOwner(new Set())) {
+      return undefined;
+    }
+    return {
+      kind: "warning",
+      message: `Skipped unowned agent database ${params.candidate.path}; deletion journal history is unavailable.`,
+    };
+  }
+  const deletedAgentIds = new Set(
+    params.retainedDeletions.map((entry) => normalizeAgentId(entry.agentId)),
+  );
+  const deletion = params.retainedDeletions.find(
+    (entry) =>
+      normalizeAgentId(entry.agentId) === normalizeAgentId(params.candidate.agentId) ||
+      entry.databasePaths.some((databasePath) =>
+        sameDatabasePath(databasePath, params.candidate.path),
+      ),
+  );
+  if (!deletion) {
+    return undefined;
+  }
+  const hasSurvivingRegisteredOwner = params.registeredAgentDatabases.some(
+    (owner) =>
+      !deletedAgentIds.has(normalizeAgentId(owner.agentId)) &&
+      sameDatabasePath(owner.path, params.candidate.path),
+  );
+  if (hasConfiguredOwner(deletedAgentIds) || hasSurvivingRegisteredOwner) {
+    return normalizeAgentId(params.candidate.agentId) === normalizeAgentId(deletion.agentId)
+      ? { kind: "silent", message: "" }
+      : undefined;
+  }
+  return {
+    kind: "notice",
+    message: `Held retained database ${params.candidate.path} for deleted agent ${deletion.agentId}; run ${formatCliCommand("openclaw doctor --fix", params.env)} to inspect restoration options.`,
+  };
+}
 
 function listDefaultAgentDatabaseTargets(
   env: NodeJS.ProcessEnv,
@@ -46,9 +112,11 @@ function listDefaultAgentDatabaseTargets(
 export function discoverAgentDatabaseMigrationTargets(params: {
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   registeredAgentDatabases: readonly { agentId: string; path: string }[];
+  retainedDeletions?: RetainedAgentDeletionDisposition;
   env: NodeJS.ProcessEnv;
 }) {
   const warnings: string[] = [];
+  const notices: string[] = [];
   const failures: Array<{ path: string; reason: string }> = [];
   const registryRemovals: Array<{ agentId: string; path: string; change?: string }> = [];
   const failure = (pathname: string, reason: string) => {
@@ -88,12 +156,37 @@ export function discoverAgentDatabaseMigrationTargets(params: {
     }
   }
   const configuredPathMatcher = createOpenClawAgentDatabasePathMatcher();
+  const retainedDeletions = params.retainedDeletions ?? readRetainedAgentDeletions(params.env);
+  const retainedDeletionWarning = retainedAgentDeletionReadWarning(retainedDeletions);
+  if (retainedDeletionWarning) {
+    warnings.push(retainedDeletionWarning);
+  }
   const targets: AgentDatabaseMigrationTarget[] = [];
   const seenRealPaths = new Set<string>();
   for (const candidate of candidates) {
     // Preserve the original locator: lexical normalization of `link/../file`
     // can select a different file than filesystem symlink traversal does.
     const pathname = candidate.path;
+    const retainedHold = classifyRetainedAgentDatabaseHold({
+      candidate,
+      configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets,
+      registeredAgentDatabases: params.registeredAgentDatabases,
+      retainedDeletions,
+      env: params.env,
+    });
+    if (retainedHold) {
+      if (retainedHold.kind === "silent") {
+        continue;
+      }
+      const messages = retainedHold.kind === "notice" ? notices : warnings;
+      if (!messages.includes(retainedHold.message)) {
+        messages.push(retainedHold.message);
+      }
+      if (retainedHold.kind === "warning") {
+        failures.push({ path: pathname, reason: retainedHold.message });
+      }
+      continue;
+    }
     if (!isPersistentOpenClawAgentDatabasePath(pathname, params.env)) {
       discard(
         candidate,
@@ -164,7 +257,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
     seenRealPaths.add(realPath);
     targets.push({ ...candidate, path: pathname, realPath });
   }
-  return { targets, registryRemovals, warnings, failures };
+  return { targets, registryRemovals, warnings, notices, failures };
 }
 
 /** Migration alone owns cleanup of stale registry entries discovered above. */
@@ -172,6 +265,8 @@ export function resolveAgentDatabaseMigrationTargets(params: {
   changes: string[];
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   env: NodeJS.ProcessEnv;
+  notices?: string[];
+  retainedDeletions?: RetainedAgentDeletionDisposition;
   warnings: string[];
 }): AgentDatabaseMigrationTarget[] {
   let registeredAgentDatabases: ReturnType<typeof listOpenClawRegisteredAgentDatabases> = [];
@@ -193,6 +288,7 @@ export function resolveAgentDatabaseMigrationTargets(params: {
     }
   }
   params.warnings.push(...discovery.warnings);
+  params.notices?.push(...discovery.notices);
   return discovery.targets;
 }
 

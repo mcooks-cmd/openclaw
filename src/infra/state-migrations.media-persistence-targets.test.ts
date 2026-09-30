@@ -5,6 +5,10 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
+import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
@@ -68,6 +72,251 @@ afterEach(() => {
 });
 
 describe("media persistence migration targets", () => {
+  it("skips a retained database after its agent deletion completes", async () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-retained-deletion-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "retired";
+    const operationId = "retained-deletion";
+    const databasePath = createLegacyAgentDatabase({ agentId, env });
+    const agentDir = path.dirname(databasePath);
+    beginAgentDeletionJournal(
+      {
+        agentId,
+        operationId,
+        agentDir,
+        workspaceDir: path.join(stateDir, "workspaces", agentId),
+        sessionsDir: path.join(agentDir, "sessions"),
+        databasePaths: [databasePath],
+        deleteFiles: false,
+      },
+      { env },
+    );
+    expect(completeAgentDeletionJournal(agentId, operationId, { env })).toBe(true);
+    unregisterOpenClawAgentDatabase({ agentId, env, path: databasePath });
+
+    const result = await migrateLegacyMediaPersistence({ env });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toEqual([
+      `Held retained database ${databasePath} for deleted agent ${agentId}; run openclaw doctor --fix to inspect restoration options.`,
+    ]);
+    expect(readUserVersion(databasePath)).toBe(PREVIOUS_VERSION);
+  });
+
+  it("migrates a retained path claimed by a surviving configured owner", async () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-retained-surviving-owner-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = path.join(stateDir, "agents", "retired", "agent", "openclaw-agent.sqlite");
+    createLegacyAgentDatabase({ agentId: "survivor", env, path: databasePath });
+    const operationId = "retained-surviving-owner";
+    beginAgentDeletionJournal(
+      {
+        agentId: "retired",
+        operationId,
+        agentDir: path.dirname(databasePath),
+        workspaceDir: path.join(stateDir, "workspaces", "retired"),
+        sessionsDir: path.join(stateDir, "agents", "retired", "sessions"),
+        databasePaths: [databasePath],
+        deleteFiles: false,
+      },
+      { env },
+    );
+    expect(completeAgentDeletionJournal("retired", operationId, { env })).toBe(true);
+
+    const result = await migrateLegacyMediaPersistence({
+      configuredAgentDatabaseTargets: [{ agentId: "survivor", path: databasePath }],
+      env,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toBeUndefined();
+    expect(readUserVersion(databasePath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(
+      listOpenClawRegisteredAgentDatabases({
+        env,
+        includeIncompatibleSchemaVersions: true,
+      }),
+    ).toEqual([expect.objectContaining({ agentId: "survivor", path: databasePath })]);
+  });
+
+  it("migrates a surviving registered owner through a hardlink to a retained path", async () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-retained-hardlink-owner-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const retainedPath = path.join(stateDir, "agents", "retired", "agent", "openclaw-agent.sqlite");
+    createLegacyAgentDatabase({ agentId: "survivor", env, path: retainedPath });
+    unregisterOpenClawAgentDatabase({ agentId: "survivor", env, path: retainedPath });
+    const survivingPath = path.join(stateDir, "stores", "survivor.sqlite");
+    fs.mkdirSync(path.dirname(survivingPath), { recursive: true });
+    fs.linkSync(retainedPath, survivingPath);
+    registerOpenClawAgentDatabase({
+      agentId: "survivor",
+      env,
+      path: survivingPath,
+      schemaVersion: PREVIOUS_VERSION,
+    });
+    const operationId = "retained-hardlink-owner";
+    beginAgentDeletionJournal(
+      {
+        agentId: "retired",
+        operationId,
+        agentDir: path.dirname(retainedPath),
+        workspaceDir: path.join(stateDir, "workspaces", "retired"),
+        sessionsDir: path.join(stateDir, "agents", "retired", "sessions"),
+        databasePaths: [retainedPath],
+        deleteFiles: false,
+      },
+      { env },
+    );
+    expect(completeAgentDeletionJournal("retired", operationId, { env })).toBe(true);
+
+    const result = await migrateLegacyMediaPersistence({ env });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toBeUndefined();
+    expect(readUserVersion(retainedPath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(readUserVersion(survivingPath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+  });
+
+  it("holds an unowned database when deletion journal history is unavailable", async () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-missing-deletion-history-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = createLegacyAgentDatabase({ agentId: "unknown", env });
+    const state = openOpenClawStateDatabase({ env });
+    state.db.exec("DROP TABLE agent_deletion_journal");
+    closeOpenClawStateDatabaseForTest();
+
+    const result = await migrateLegacyMediaPersistence({ env });
+
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Agent database maintenance deferred"),
+    ]);
+    expect(readUserVersion(databasePath)).toBe(PREVIOUS_VERSION);
+  });
+
+  it("holds an unowned database when retained deletion history is malformed", async () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-malformed-deletion-history-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "unknown";
+    const operationId = "malformed-deletion-history";
+    const databasePath = createLegacyAgentDatabase({ agentId, env });
+    beginAgentDeletionJournal(
+      {
+        agentId,
+        operationId,
+        agentDir: path.dirname(databasePath),
+        workspaceDir: path.join(stateDir, "workspaces", agentId),
+        sessionsDir: path.join(stateDir, "agents", agentId, "sessions"),
+        databasePaths: [databasePath],
+        deleteFiles: false,
+      },
+      { env },
+    );
+    expect(completeAgentDeletionJournal(agentId, operationId, { env })).toBe(true);
+    const state = openOpenClawStateDatabase({ env });
+    state.db
+      .prepare("UPDATE agent_deletion_journal SET database_paths_json = ? WHERE agent_id = ?")
+      .run("{}", agentId);
+    closeOpenClawStateDatabaseForTest();
+
+    const result = await migrateLegacyMediaPersistence({ env });
+
+    expect(result.warnings).toContain(
+      `Skipped unowned agent database ${databasePath}; deletion journal history is unavailable.`,
+    );
+    expect(readUserVersion(databasePath)).toBe(PREVIOUS_VERSION);
+    expect(
+      listOpenClawRegisteredAgentDatabases({
+        env,
+        includeIncompatibleSchemaVersions: true,
+      }),
+    ).toEqual([expect.objectContaining({ agentId, path: databasePath })]);
+  });
+
+  it("migrates a configured active database when deletion history is malformed", async () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-malformed-active-history-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = createLegacyAgentDatabase({ agentId: "active", env });
+    beginAgentDeletionJournal(
+      {
+        agentId: "retired",
+        operationId: "malformed-active-history",
+        agentDir: path.join(stateDir, "agents", "retired", "agent"),
+        workspaceDir: path.join(stateDir, "workspaces", "retired"),
+        sessionsDir: path.join(stateDir, "agents", "retired", "sessions"),
+        databasePaths: [path.join(stateDir, "agents", "retired", "agent.sqlite")],
+        deleteFiles: false,
+      },
+      { env },
+    );
+    expect(completeAgentDeletionJournal("retired", "malformed-active-history", { env })).toBe(true);
+    const state = openOpenClawStateDatabase({ env });
+    state.db
+      .prepare("UPDATE agent_deletion_journal SET database_paths_json = ? WHERE agent_id = ?")
+      .run("{}", "retired");
+    closeOpenClawStateDatabaseForTest();
+
+    const result = await migrateLegacyMediaPersistence({
+      configuredAgentDatabaseTargets: [{ agentId: "active", path: databasePath }],
+      env,
+    });
+
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Could not read retained agent deletion history"),
+      ]),
+    );
+    expect(readUserVersion(databasePath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+  });
+
+  it("rechecks deletion ownership immediately before database writes", async () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-deletion-race-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "retired-during-migration";
+    const operationId = "retired-during-migration";
+    const databasePath = createLegacyAgentDatabase({ agentId, env });
+
+    const result = await migrateLegacyMediaPersistence({
+      env,
+      hooks: {
+        beforeDatabaseTransaction: () => {
+          beginAgentDeletionJournal(
+            {
+              agentId,
+              operationId,
+              agentDir: path.dirname(databasePath),
+              workspaceDir: path.join(stateDir, "workspaces", agentId),
+              sessionsDir: path.join(stateDir, "agents", agentId, "sessions"),
+              databasePaths: [databasePath],
+              deleteFiles: false,
+            },
+            { env },
+          );
+          expect(completeAgentDeletionJournal(agentId, operationId, { env })).toBe(true);
+        },
+      },
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toEqual([
+      `Held retained database ${databasePath} for deleted agent ${agentId}; run openclaw doctor --fix to inspect restoration options.`,
+    ]);
+    expect(readUserVersion(databasePath)).toBe(PREVIOUS_VERSION);
+  });
+
   it("migrates and registers an unregistered default-layout agent database", async () => {
     const stateDir = fs.realpathSync.native(makeTempDir(tempDirs, "media-persistence-disk-scan-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
