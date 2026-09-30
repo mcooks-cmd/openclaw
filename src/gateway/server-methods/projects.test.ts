@@ -74,7 +74,9 @@ test("projects.list coalesces concurrent observed Git discovery and refreshes la
       },
     });
     const gitSpawns = () =>
-      spawns.mock.calls.filter(([command]) => path.basename(command) === "git").length;
+      spawns.mock.calls.filter(([command]) =>
+        /^git(?:\.exe|\.cmd)?$/i.test(path.win32.basename(command)),
+      ).length;
     const onePass = gitSpawns();
     expect(onePass).toBeGreaterThan(0);
     spawns.mockClear();
