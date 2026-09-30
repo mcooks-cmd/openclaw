@@ -12,9 +12,9 @@ import {
 import {
   readPreparedPoolPresenceDemandInDatabase,
   writePreparedPoolPresenceDemandInDatabase,
-  type PreparedPoolPresenceDemand,
 } from "./prepared-pool-presence-store.js";
 import { readPreparedPoolPresenceDemand } from "./prepared-pool-presence-worker.js";
+import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 
 const PRESENCE_KEY = "cloudWorkers.preparedPool.humanPresenceDemand";
 

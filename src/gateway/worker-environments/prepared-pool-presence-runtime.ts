@@ -3,10 +3,8 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import {
-  writePreparedPoolPresenceDemandInDatabase,
-  type PreparedPoolPresenceDemand,
-} from "./prepared-pool-presence-store.js";
+import { writePreparedPoolPresenceDemandInDatabase } from "./prepared-pool-presence-store.js";
+import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 
 type PresenceCommand = {
   type: "preparedPoolPresence.write";

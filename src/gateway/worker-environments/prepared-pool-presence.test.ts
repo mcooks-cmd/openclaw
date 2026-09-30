@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence-store.js";
+import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 import {
   PREPARATION_KEY,
   PROJECT_KEY,
   usePreparedPoolFixture,
   type PoolOptions,
 } from "./prepared-pool.test-support.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 describe("authenticated human prepared-pool demand", () => {
   const fixture = usePreparedPoolFixture();

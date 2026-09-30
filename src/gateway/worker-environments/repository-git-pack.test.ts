@@ -9,7 +9,7 @@ import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { createWorkerProjectPreparation } from "./project-preparation.js";
 import { prepareRepositoryWorkerGitPack } from "./repository-git-pack.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
 
 type RepositoryPackProducer = NonNullable<

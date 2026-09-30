@@ -12,6 +12,7 @@ import {
   type PreparedProjectVerification,
 } from "./project-setup-script.js";
 import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type {} from "./repository-project-source.schema.js";
 import {
   prepareWorkerWorkspaceGitPack,
   workerProjectSeedKey,

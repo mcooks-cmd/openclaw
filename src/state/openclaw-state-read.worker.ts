@@ -50,6 +50,7 @@ import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-e
 import { readWorkspaceJournalInDatabase } from "../gateway/worker-environments/placement-workspace-journal.js";
 import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
 import { readPreparedPoolPresenceDemandInDatabase } from "../gateway/worker-environments/prepared-pool-presence-store.js";
+import type {} from "../gateway/worker-environments/prepared-pool-presence.types.js";
 import {
   readWorkerEnvironmentFacts,
   readWorkerEnvironmentPrunePage,

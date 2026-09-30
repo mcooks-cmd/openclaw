@@ -5,9 +5,9 @@ import {
   readWorkerProjectPreparation,
   type WorkerProviderPreparedIntent,
 } from "./preparation-identity.js";
-import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence-store.js";
+import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 

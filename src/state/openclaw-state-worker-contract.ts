@@ -44,7 +44,7 @@ import type { WorkerPlacementDispatchStoreOperations } from "../gateway/worker-e
 import type { PlacementSessionToolWorkerOperations } from "../gateway/worker-environments/placement-session-tool-operations.worker-contract.js";
 import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
 import type { WorkspaceJournalWorkerOperations } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
-import type { PreparedPoolPresenceWorkerOperations } from "../gateway/worker-environments/prepared-pool-presence-store.js";
+import type { PreparedPoolPresenceWorkerOperations } from "../gateway/worker-environments/prepared-pool-presence.types.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type {
   DeferredPluginMigration,

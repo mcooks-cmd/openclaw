@@ -2,7 +2,7 @@ import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence-store.js";
+import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 
 export async function readPreparedPoolPresenceDemand(): Promise<
   PreparedPoolPresenceDemand | undefined

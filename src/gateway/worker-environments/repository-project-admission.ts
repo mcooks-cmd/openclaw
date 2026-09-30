@@ -15,10 +15,8 @@ import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.run
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { gitHubPublicApi } from "../github-public-api.js";
-import {
-  readRepositoryWorkerProjectSnapshot,
-  type RepositoryWorkerProjectSnapshot,
-} from "./repository-project-source.js";
+import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 const GitObject = /^[a-f0-9]{40}$/u;
 // Commit lookup requests one changed file; trees are nonrecursive and inspect

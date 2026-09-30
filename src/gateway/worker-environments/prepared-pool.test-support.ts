@@ -14,7 +14,7 @@ import {
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { createWorkerEnvironmentStore } from "./store.js";

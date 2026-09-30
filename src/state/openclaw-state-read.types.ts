@@ -52,7 +52,7 @@ import type {
   WorkspaceJournalReadCommand,
   WorkspaceJournalReadResult,
 } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
-import type { PreparedPoolPresenceDemand } from "../gateway/worker-environments/prepared-pool-presence-store.js";
+import type { PreparedPoolPresenceDemand } from "../gateway/worker-environments/prepared-pool-presence.types.js";
 import type {
   WorkerEnvironmentFacts,
   WorkerEnvironmentPrunePage,
