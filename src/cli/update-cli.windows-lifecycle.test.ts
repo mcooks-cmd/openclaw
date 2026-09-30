@@ -664,7 +664,11 @@ describe("update-cli", () => {
           resolveGatewayTaskScriptPath(process.env),
         );
       }
-      resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
+      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(async (_env, options) => {
+        options?.assertCurrent?.();
+        await options?.beforeMutation?.();
+        return true;
+      });
       serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
 
       const updatePromise = updateCommand({ yes: true, restart: false });
