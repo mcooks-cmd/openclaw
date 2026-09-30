@@ -351,7 +351,7 @@ public enum OpenClawChatGatewayRequests {
             supportsSessionSettingsCAS: supportsSessionSettingsCAS)
     }
 
-    static func patchSessionSettings(
+    public static func patchSessionSettings(
         sessionKey: String,
         agentID: String?,
         expectedSessionID: String? = nil,
