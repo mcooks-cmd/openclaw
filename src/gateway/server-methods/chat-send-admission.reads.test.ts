@@ -12,7 +12,7 @@ import { admitChatSend } from "./chat-send-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession, qualifyChatSendSession } from "./chat-send-session.js";
 
-it("loads fresh admission metadata once after preparing the session", async () => {
+it("uses fresh worker-prepared admission settings without host metadata reads", async () => {
   await withOpenClawTestState({ label: "chat-admission-read-count" }, async () => {
     const cfg = {
       agents: { ownership: "explicit", entries: { main: {} } },
@@ -35,7 +35,11 @@ it("loads fresh admission metadata once after preparing the session", async () =
       throw new Error(request.error);
     }
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-    const prepared = prepareChatSendSession({ request: request.value, client: null, context });
+    const prepared = await prepareChatSendSession({
+      request: request.value,
+      client: null,
+      context,
+    });
     if (!prepared.ok) {
       throw new Error("Session preparation failed");
     }
@@ -66,7 +70,7 @@ it("loads fresh admission metadata once after preparing the session", async () =
         const metadataReads = sql.queries.filter(
           (query) => /\bsession_nodes\b/u.test(query) && /\bentry_json\b/u.test(query),
         );
-        expect(metadataReads.length, metadataReads.join("\n")).toBeLessThanOrEqual(1);
+        expect(metadataReads, metadataReads.join("\n")).toHaveLength(0);
       } finally {
         sql.restore();
       }
@@ -76,6 +80,106 @@ it("loads fresh admission metadata once after preparing the session", async () =
       }
       session.releaseSessionTarget();
       clearAgentRunContext(runId);
+    }
+  });
+});
+
+it("releases rejected upload reservations so corrected input can reuse its key", async () => {
+  await withOpenClawTestState({ label: "chat-upload-reservation" }, async () => {
+    const cfg = {
+      agents: { ownership: "explicit", entries: { main: {} } },
+      gateway: { uploads: { enabled: false } },
+    } satisfies OpenClawConfig;
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const sessionKey = "agent:main:dashboard:upload-retry";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey },
+      { sessionId: "upload-session", updatedAt: 1 },
+    );
+    for (const failure of ["denied", "throws"] as const) {
+      const runId = `upload-retry-${failure}`;
+      const policyError = new Error("fixture upload policy unavailable");
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      context.getCommittedRuntimeConfig = () => {
+        if (failure === "throws") {
+          throw policyError;
+        }
+        return cfg;
+      };
+      const blocked = normalizeChatSendRequest({
+        client: null,
+        params: {
+          sessionKey,
+          message: "Hello",
+          idempotencyKey: runId,
+          attachments: [
+            { type: "file", mimeType: "text/plain", fileName: "blocked.txt", content: "aGVsbG8=" },
+          ],
+        },
+      });
+      if (!blocked.ok) {
+        throw new Error("fixture attachment normalization failed");
+      }
+      const prepared = await prepareChatSendSession({
+        request: blocked.value,
+        client: null,
+        context,
+      });
+      if (!prepared.ok) {
+        throw new Error("fixture session preparation failed");
+      }
+      const session = qualifyChatSendSession(prepared.value);
+      try {
+        const admission = admitChatSend({
+          request: blocked.value,
+          session,
+          client: null,
+          context,
+          respond: vi.fn(),
+        });
+        if (failure === "throws") {
+          await expect(admission).rejects.toBe(policyError);
+        } else {
+          await expect(admission).resolves.toMatchObject({ ok: false });
+        }
+        expect(context.dedupe.has(session.pendingChatSendKey)).toBe(false);
+        expect(context.chatAbortControllers.size).toBe(0);
+      } finally {
+        session.releaseSessionTarget();
+      }
+      const corrected = normalizeChatSendRequest({
+        client: null,
+        params: { sessionKey, message: "Hello", idempotencyKey: runId },
+      });
+      if (!corrected.ok) {
+        throw new Error("fixture corrected normalization failed");
+      }
+      const next = await prepareChatSendSession({
+        request: corrected.value,
+        client: null,
+        context,
+      });
+      if (!next.ok) {
+        throw new Error("fixture retry preparation failed");
+      }
+      const retrySession = qualifyChatSendSession(next.value);
+      let retried: Awaited<ReturnType<typeof admitChatSend>> | undefined;
+      try {
+        retried = await admitChatSend({
+          request: corrected.value,
+          session: retrySession,
+          client: null,
+          context,
+          respond: vi.fn(),
+        });
+        expect(retried.ok).toBe(true);
+      } finally {
+        if (retried?.ok) {
+          retried.value.cleanupAdmittedRun();
+        }
+        retrySession.releaseSessionTarget();
+        clearAgentRunContext(runId);
+      }
     }
   });
 });

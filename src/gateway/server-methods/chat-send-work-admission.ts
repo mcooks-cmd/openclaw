@@ -1,10 +1,16 @@
+import { err, ok } from "@openclaw/normalization-core/result";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
-import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  interruptReplyRunTarget,
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  replyRunRegistry,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { retireProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import {
   isCompetingSessionWorkAdmissionActive,
+  interruptSessionWorkAdmissions,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import type { registerChatAbortController } from "../chat-abort.js";
@@ -24,23 +30,27 @@ export function admitChatSendUploads({
   client,
   context,
   respond,
-}: Pick<GatewayRequestHandlerOptions, "params" | "client" | "context" | "respond">) {
-  const assertClientUploadAllowed = captureGatewayClientUploadCommitGuard({
-    method: "chat.send",
-    requestParams: params,
-    client,
-    context,
-  });
+  onRejected,
+}: Pick<GatewayRequestHandlerOptions, "params" | "client" | "context" | "respond"> & {
+  onRejected?: () => void;
+}) {
   try {
+    const assertClientUploadAllowed = captureGatewayClientUploadCommitGuard({
+      method: "chat.send",
+      requestParams: params,
+      client,
+      context,
+    });
     assertClientUploadAllowed?.();
+    return { ok: true as const, assertClientUploadAllowed };
   } catch (error) {
+    onRejected?.();
     if (!(error instanceof SessionMutationAuthorizationChangedError)) {
       throw error;
     }
     respond(false, undefined, error.error);
     return { ok: false as const };
   }
-  return { ok: true as const, assertClientUploadAllowed };
 }
 
 /** Caller and physical target custody end together when admitted work settles. */
@@ -60,6 +70,47 @@ export function releaseChatSendCallerAuthority(params: {
       params.session.releaseSessionTarget();
     }
   }
+}
+
+/** Observe started work before the retained read releases; consuming still rethrows its error. */
+export function observeChatSendWork<T>(work: Promise<T>): () => Promise<T> {
+  const outcome = work.then(ok<T, unknown>, err<T, unknown>);
+  return async () => {
+    const result = await outcome;
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.value;
+  };
+}
+
+/** Interrupt the captured run, or competing admissions, without ever targeting this admission. */
+export function interruptChatSendWork(params: {
+  target: ReturnType<typeof replyRunRegistry.resolveCurrentInterruptTarget>;
+  signal: AbortSignal;
+  admission: Pick<SessionWorkAdmissionLease, "run">;
+  storePath: string;
+  identities: Array<string | undefined>;
+}) {
+  params.signal.throwIfAborted();
+  if (params.target) {
+    return interruptReplyRunTarget(params.target, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS).then(
+      ({ settled }) => ({ interrupted: true, settled }),
+    );
+  }
+  return params.admission.run(async () => {
+    if (!isCompetingSessionWorkAdmissionActive(params.storePath, params.identities)) {
+      return { interrupted: false, settled: true };
+    }
+    return {
+      interrupted: true,
+      settled: await interruptSessionWorkAdmissions({
+        scope: params.storePath,
+        identities: params.identities,
+        timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+      }),
+    };
+  });
 }
 
 /** Queued and collected turns share the original session and caller admission until settlement. */

@@ -54,7 +54,7 @@ export function resolveDirectIncognitoTargets(
   );
 }
 
-function readSessionSharingStringParam(params: unknown, key: string): string | undefined {
+export function readSessionSharingStringParam(params: unknown, key: string): string | undefined {
   return normalizeOptionalString(asOptionalRecord(params)?.[key]);
 }
 

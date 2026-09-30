@@ -202,6 +202,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-sharing-preparation.admission.test.ts",
   "src/gateway/session-sharing-preparation.creation-settlement.test.ts",
   "src/gateway/session-sharing-preparation.test.ts",
+  "src/gateway/session-sharing.worker.test.ts",
   "src/gateway/session-startup-migration.test.ts",
   "src/gateway/session-subagent-resume.test.ts",
   "src/gateway/session-swarm-summary.test.ts",
@@ -466,6 +467,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server-close.agent-databases.test.ts",
   "src/gateway/server-close.question-publication.test.ts",
   "src/gateway/server.chat.canonical-publication.test.ts",
+  "src/gateway/server.chat-membership-authority.product.test.ts",
   "src/gateway/server-chat.retired-projection.test.ts",
   "src/gateway/server-plugin-subagent-runtime.overrides.test.ts",
   // Loads the real plugin runtime that neighboring server tests replace with mocks.

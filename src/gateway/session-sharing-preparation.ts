@@ -1,7 +1,11 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { ok } from "@openclaw/normalization-core/result";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import {
+  resolveSessionStoreCompatibilityAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../config/legacy.default-agent-owner.js";
 import {
   assertSessionEntryCreationPublication,
   isPreparedSessionSharingChange,
@@ -65,17 +69,23 @@ export class SessionMutationFactsUnavailableError extends Error {
 function routeFacts(cfg: OpenClawConfig) {
   return {
     agents: listAgentIds(cfg),
+    storeOwner: resolveSessionStoreCompatibilityAgentId(cfg),
+    compatibilityOwner: tryResolveLegacyCompatibilityAgentId(cfg),
+    systemOwner: tryResolveAmbientOwnerAgentId(cfg),
     store: cfg.session?.store,
     mainKey: cfg.session?.mainKey,
     scope: cfg.session?.scope,
   };
 }
 
-export function captureSessionMutationRouting(cfg: OpenClawConfig) {
+export function captureSessionMutationRouting(
+  cfg: OpenClawConfig,
+  changed: () => Error = () => new SessionMutationFactsUnavailableError(),
+) {
   const route = routeFacts(cfg);
   return (current: OpenClawConfig) => {
     if (!isDeepStrictEqual(routeFacts(current), route)) {
-      throw new SessionMutationFactsUnavailableError();
+      throw changed();
     }
   };
 }
@@ -212,8 +222,10 @@ export async function prepareSessionMutationFacts(
     ) {
       return;
     }
-    // Placement and presentation observers do not change stored sharing facts.
-    // Entry/member writers name their physical store; identity changes have a separate owner.
+    if ("all" in change) {
+      invalidate();
+      return;
+    }
     if (!change.storePath) {
       return;
     }
