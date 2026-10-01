@@ -30,6 +30,10 @@ type CatalogRow = {
   marker: string;
   url: string;
   arrayBuffers: number;
+  sawHandle?: boolean;
+  staleRejected?: boolean;
+  staleError?: string;
+  staleEvaluations?: number;
 };
 
 type Sample = CatalogRow & { catalogModelIds: string[] };
@@ -60,7 +64,7 @@ function writePlugin(dir: string): string {
     `import fs from "node:fs";
 const retained = new Uint8Array(${NATIVE_ESM_BUFFER_BYTES});
 retained[0] = 7;
-let marker = "unset";
+let handle;
 let registers = 0;
 const evaluations = globalThis[Symbol.for("openclaw.retentionWidthEvaluations")] ??= { count: 0 };
 evaluations.count += 1;
@@ -68,18 +72,20 @@ const bornAt = evaluations.count;
 export function register(api) {
   if (retained[0] !== 7) throw new Error("retained native ESM buffer was collected");
   registers += 1;
-  marker = String(api?.pluginConfig?.marker ?? "unset");
+  handle = api;
   api.registerProvider({
     id: ${JSON.stringify(PROVIDER_ID)},
     label: "Retention width",
     auth: [],
     catalog: { async run() {
+      const marker = String(handle?.pluginConfig?.marker ?? "missing-handle");
       fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify({
         phase: "catalog",
         evaluations: evaluations.count,
         bornAt,
         registers,
         marker,
+        sawHandle: typeof handle?.registerProvider === "function",
         url: import.meta.url,
         arrayBuffers: process.memoryUsage().arrayBuffers,
       }) + "\\n");
@@ -119,6 +125,14 @@ function publish(label: string, names: string[], samples: Sample[]): void {
         bornAt: sample.bornAt,
         arrayBuffers: sample.arrayBuffers,
         sameModuleAsFirst: sample.url === firstUrl,
+        sawHandle: sample.sawHandle === true,
+        ...(sample.staleRejected === undefined
+          ? {}
+          : {
+              staleRejected: sample.staleRejected,
+              staleError: sample.staleError,
+              staleEvaluations: sample.staleEvaluations,
+            }),
         catalogModelIds: sample.catalogModelIds,
       })),
     }),
@@ -136,9 +150,14 @@ async function measure(
     marker: string;
     revision: number;
   }>,
+  options?: {
+    captureDir?: string;
+    beforeRequest?: (index: number, captureDir: string) => void;
+  },
 ): Promise<Sample[]> {
   const fixture = createCatalogFixture(makeTempDir, 0);
   const samples: Sample[] = [];
+  const captureDir = options?.captureDir ?? makeTempDir(`openclaw-retention-width-${label}-`);
   const pool = new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
     maxWorkers: 1,
@@ -147,13 +166,14 @@ async function measure(
     workerOptions: {
       resourceLimits: { maxOldGenerationSizeMb: 512 },
       workerData: {
-        sourceCaptureDirectory: makeTempDir(`openclaw-retention-width-${label}-`),
+        sourceCaptureDirectory: captureDir,
       },
       env: fixture.env,
     },
   });
   try {
-    for (const request of requests) {
+    for (const [index, request] of requests.entries()) {
+      options?.beforeRequest?.(index, captureDir);
       fs.mkdirSync(request.workspaceDir, { recursive: true });
       fs.mkdirSync(request.agentDir, { recursive: true });
       const config = {
@@ -269,7 +289,7 @@ it("grows when each refresh evaluates a new native ESM module", async () => {
   expect(growth).toBeGreaterThan(NATIVE_ESM_BUFFER_BYTES * 4);
 }, 180_000);
 
-it("shares one native ESM module between live workspaces", async () => {
+it("keeps one native ESM module per workspace for the same installed path", async () => {
   const root = makeTempDir("openclaw-retention-shared-");
   const entry = writePlugin(path.join(root, "plugin"));
   const alpha = {
@@ -285,7 +305,7 @@ it("shares one native ESM module between live workspaces", async () => {
     agentId: "beta",
   };
   const samples = await measure(
-    "one-module",
+    "per-workspace-path",
     ["alpha", "alpha-again", "beta", "alpha-after-beta", "alpha-refresh", "beta-after-refresh"],
     [
       { ...alpha, marker: "alpha", revision: 0 },
@@ -296,18 +316,25 @@ it("shares one native ESM module between live workspaces", async () => {
       { ...beta, marker: "beta", revision: 0 },
     ],
   );
-  expect(samples.every((sample) => sample.evaluations === 1)).toBe(true);
-  expect(new Set(samples.map((sample) => sample.url)).size).toBe(1);
+  expect(samples.map((sample) => sample.evaluations)).toEqual([1, 1, 2, 2, 2, 2]);
+  expect(samples[0]?.url).toBe(samples[1]?.url);
+  expect(samples[0]?.url).toBe(samples[3]?.url);
+  expect(samples[0]?.url).toBe(samples[4]?.url);
+  expect(samples[2]?.url).toBe(samples[5]?.url);
+  expect(samples[0]?.url).not.toBe(samples[2]?.url);
+  expect(samples.every((sample) => sample.sawHandle === true)).toBe(true);
   expect(samples.map((sample) => sample.marker)).toEqual([
     "alpha",
     "alpha",
     "beta",
+    "alpha",
+    "alpha",
     "beta",
-    "alpha",
-    "alpha",
   ]);
-  const growth = samples.at(-1)!.arrayBuffers - samples[0]!.arrayBuffers;
-  expect(growth).toBeLessThan(NATIVE_ESM_BUFFER_BYTES);
+  const secondWorkspaceGrowth = samples[2]!.arrayBuffers - samples[1]!.arrayBuffers;
+  const refreshGrowth = samples.at(-1)!.arrayBuffers - samples[2]!.arrayBuffers;
+  expect(secondWorkspaceGrowth).toBeGreaterThanOrEqual(NATIVE_ESM_BUFFER_BYTES);
+  expect(refreshGrowth).toBeLessThan(NATIVE_ESM_BUFFER_BYTES);
 }, 180_000);
 
 it("keeps a native ESM module per workspace copy and grows with new workspaces", async () => {
@@ -370,4 +397,169 @@ it("keeps a native ESM module per workspace copy and grows with new workspaces",
   expect(refreshGrowth).toBeLessThan(NATIVE_ESM_BUFFER_BYTES);
   expect(churnGrowth).toBeGreaterThan(NATIVE_ESM_BUFFER_BYTES);
   expect(afterChurnGrowth).toBeLessThan(NATIVE_ESM_BUFFER_BYTES);
+}, 180_000);
+
+function writeRetiredHandlePlugin(dir: string): string {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "package.json"),
+    JSON.stringify({ name: PLUGIN_ID, type: "module" }),
+  );
+  fs.writeFileSync(
+    path.join(dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: PLUGIN_ID,
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          marker: { type: "string" },
+          revision: { type: "number" },
+        },
+      },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(dir, "retired-side.js"),
+    `const state = globalThis[Symbol.for("openclaw.nativeEsmHandleRetired")] ??= { evaluations: 0 };
+state.evaluations += 1;
+export const evaluations = state.evaluations;
+`,
+  );
+  const entry = path.join(dir, "index.js");
+  fs.writeFileSync(
+    entry,
+    `import fs from "node:fs";
+let handle;
+let registers = 0;
+let catalogs = 0;
+export function register(api) {
+  registers += 1;
+  handle = api;
+  api.registerProvider({
+    id: ${JSON.stringify(PROVIDER_ID)},
+    label: "Retained handle",
+    auth: [],
+    catalog: { async run() {
+      catalogs += 1;
+      const marker = String(handle?.pluginConfig?.marker ?? "missing-handle");
+      if (marker === "alpha" && catalogs === 1) {
+        let openGate;
+        const gate = new Promise((resolve) => {
+          openGate = resolve;
+        });
+        globalThis[Symbol.for("openclaw.nativeEsmHandleGate")] = openGate;
+        globalThis[Symbol.for("openclaw.nativeEsmHandleImport")] = gate.then(() => import("./retired-side.js"));
+      }
+      let staleRejected = false;
+      let staleEvaluations = 0;
+      let staleError;
+      if (marker === "beta" && catalogs === 2) {
+        const openGate = globalThis[Symbol.for("openclaw.nativeEsmHandleGate")];
+        if (typeof openGate === "function") {
+          openGate();
+        }
+        try {
+          const imported = await globalThis[Symbol.for("openclaw.nativeEsmHandleImport")];
+          staleEvaluations = imported?.evaluations ?? 0;
+          staleError = "loaded";
+        } catch (error) {
+          staleRejected = true;
+          const message = error instanceof Error ? error.message : "";
+          staleError = message.includes("no live workspace owner")
+            ? "no-live-owner"
+            : error instanceof Error
+              ? error.name
+              : "rejected";
+        }
+      }
+      fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify({
+        phase: "catalog",
+        evaluations: 0,
+        bornAt: catalogs,
+        registers,
+        marker,
+        sawHandle: typeof handle?.registerProvider === "function",
+        staleRejected,
+        staleError,
+        staleEvaluations,
+        url: import.meta.url,
+        arrayBuffers: process.memoryUsage().arrayBuffers,
+      }) + "\\n");
+      return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: [{ id: marker, name: "Retained handle" }] } };
+    } },
+  });
+}
+`,
+  );
+  return entry;
+}
+
+function captureFiles(dir: string): string[] {
+  const found: string[] = [];
+  const pending = [dir];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current) {
+      continue;
+    }
+    for (const child of fs.readdirSync(current, { withFileTypes: true })) {
+      if (child.isSymbolicLink()) {
+        continue;
+      }
+      const childPath = path.join(current, child.name);
+      if (child.isDirectory()) {
+        pending.push(childPath);
+      } else {
+        found.push(path.relative(dir, childPath));
+      }
+    }
+  }
+  return found.toSorted();
+}
+
+it("rejects a released workspace API handle before native ESM capture", async () => {
+  const root = makeTempDir("openclaw-retention-handle-");
+  const entry = writeRetiredHandlePlugin(path.join(root, "plugin"));
+  const alpha = {
+    entry,
+    workspaceDir: path.join(root, "workspace-alpha"),
+    agentDir: path.join(root, "agent-alpha"),
+    agentId: "alpha",
+  };
+  const beta = {
+    entry,
+    workspaceDir: path.join(root, "workspace-beta"),
+    agentDir: path.join(root, "agent-beta"),
+    agentId: "beta",
+  };
+  const captureDir = makeTempDir("openclaw-retention-handle-captures-");
+  let filesBeforeStaleImport: string[] | undefined;
+  const samples = await measure(
+    "retired-handle",
+    ["alpha", "beta", "alpha-refresh", "beta-after-release"],
+    [
+      { ...alpha, marker: "alpha", revision: 0 },
+      { ...beta, marker: "beta", revision: 0 },
+      { ...alpha, marker: "alpha", revision: 1 },
+      { ...beta, marker: "beta", revision: 0 },
+    ],
+    {
+      captureDir,
+      beforeRequest(index) {
+        if (index === 3) {
+          filesBeforeStaleImport = captureFiles(captureDir);
+        }
+      },
+    },
+  );
+  const stale = samples[3];
+  expect(samples.map((sample) => sample.marker)).toEqual(["alpha", "beta", "alpha", "beta"]);
+  expect(samples.every((sample) => sample.sawHandle === true)).toBe(true);
+  expect(samples[0]?.url).not.toBe(samples[1]?.url);
+  expect(stale?.staleRejected).toBe(true);
+  expect(stale?.staleError).toBe("no-live-owner");
+  expect(stale?.staleEvaluations).toBe(0);
+  expect(filesBeforeStaleImport).toBeDefined();
+  expect(captureFiles(captureDir)).toEqual(filesBeforeStaleImport);
 }, 180_000);

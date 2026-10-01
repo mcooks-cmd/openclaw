@@ -15,6 +15,7 @@ import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import { bindPluginCacheRoot, getPluginCache, withPluginCache } from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import { getPluginInstanceOwner } from "./plugin-instance-scope.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import {
   preparePluginModuleLoaderRecovery,
@@ -35,6 +36,7 @@ import {
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
+import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 
 type RetainedNativeEsmOwner = {
@@ -53,6 +55,17 @@ const retainedNativeEsmArtifacts = new Map<
 
 function liveNativeEsmOwners(identity: string): readonly RetainedNativeEsmOwner[] {
   return [...(retainedNativeEsmOwners.get(identity) ?? [])].filter((owner) => owner.accepts());
+}
+
+function nativeEsmRetentionWorkspace(
+  instance: PluginInstanceModuleLoaderParams["instance"],
+): string | undefined {
+  const owner = getPluginInstanceOwner(instance);
+  const workspaceDir = owner
+    ? getPluginRuntimeLoadContext(owner.registry)?.workspaceDir
+    : undefined;
+  const workspace = workspaceDir?.trim();
+  return workspace ? workspace : undefined;
 }
 
 function retainedNativeEsmOwnerFor(
@@ -108,11 +121,15 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     });
     return;
   }
-  // The catalog worker keeps one capture for an unchanged native ESM entry.
-  // A new capture would be another module job Node cannot unload. Each live
-  // workspace generation keeps its own execution owner for that capture, so a
-  // deferred import uses the generation that requested it.
-  const nativeEsmIdentity = nativeEsmModuleIdentity(params.source);
+  // The catalog worker keeps one capture per workspace for an unchanged native
+  // ESM entry. Another capture for that same workspace would be a module job
+  // Node cannot unload. A different workspace gets its own module, so its
+  // module-level state stays there. Each live generation keeps its own
+  // execution owner, and a deferred import uses the generation that requested it.
+  const nativeEsmIdentity = nativeEsmModuleIdentity(
+    params.source,
+    nativeEsmRetentionWorkspace(params.instance),
+  );
   const retainedNativeEsm = nativeEsmIdentity
     ? readRetainedNativeEsmModule(nativeEsmIdentity)
     : undefined;

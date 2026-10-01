@@ -16,10 +16,12 @@ const retainedNativeEsmModules = resolveGlobalMap<string, RetainedNativeEsmModul
 );
 
 /**
- * Native ESM is keyed by the installed entry. A captured copy gets a new file
- * URL, and Node keeps that module job after dispose deletes the directory.
+ * Native ESM is keyed by the installed entry and the workspace that loads it.
+ * A captured copy gets a new file URL, and Node keeps that module job after
+ * dispose deletes the directory. Two workspaces therefore keep two modules.
+ * A load with no workspace uses the shared-root entry key.
  */
-export function nativeEsmModuleIdentity(source: string): string | undefined {
+export function nativeEsmModuleIdentity(source: string, workspaceDir?: string): string | undefined {
   // Only the long-lived catalog worker reloads installed ESM on every generation.
   // Other isolates keep the per-generation capture used by explicit reloads.
   if (!isCatalogWorker()) {
@@ -29,11 +31,14 @@ export function nativeEsmModuleIdentity(source: string): string | undefined {
   if (extension !== ".mjs" && (extension !== ".js" || !nearestPackageTypeIsModule(source))) {
     return undefined;
   }
+  let installed: string;
   try {
-    return fs.realpathSync(source);
+    installed = fs.realpathSync(source);
   } catch {
     return undefined;
   }
+  const workspace = workspaceDir?.trim();
+  return workspace ? `${installed}\0${workspace}` : installed;
 }
 
 export function readRetainedNativeEsmModule(identity: string): RetainedNativeEsmModule | undefined {
