@@ -45,6 +45,7 @@ type RetainedNativeEsmOwner = {
 };
 
 const retainedNativeEsmOwners = new Map<string, Set<RetainedNativeEsmOwner>>();
+const retainedNativeEsmKnownOwners = new Map<string, WeakSet<object>>();
 const retainedNativeEsmArtifacts = new Map<
   string,
   ReturnType<typeof capturePluginGenerationArtifact>
@@ -59,8 +60,11 @@ function retainedNativeEsmOwnerFor(
   instance: object | undefined,
 ): RetainedNativeEsmOwner {
   const owners = liveNativeEsmOwners(identity);
-  const requested = instance ? owners.find((owner) => owner.instance === instance) : undefined;
-  if (requested) {
+  if (instance) {
+    const requested = owners.find((owner) => owner.instance === instance);
+    if (!requested) {
+      throw new Error("Plugin native ESM capture has no live workspace owner for this load");
+    }
     return requested;
   }
   const only = owners.length === 1 ? owners[0] : undefined;
@@ -163,6 +167,9 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       accepts: () => accepts,
     };
     owners.add(owner);
+    const knownOwners = retainedNativeEsmKnownOwners.get(nativeEsmIdentity) ?? new WeakSet();
+    knownOwners.add(params.instance);
+    retainedNativeEsmKnownOwners.set(nativeEsmIdentity, knownOwners);
     releaseNativeEsmOwner = () => {
       accepts = false;
       owners.delete(owner);
@@ -339,16 +346,25 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   };
   const hooks = Module.registerHooks({
     resolve(specifier, context, nextResolve) {
-      // The newest generation's hook runs first. Yield when another live
-      // workspace requested this import.
+      // The newest generation's hook runs first. Yield to another live workspace.
+      // Reject a released owner of this plugin before capture. Another plugin's
+      // instance belongs to the next hook.
       const requestedOwner = pluginInstanceInvocation.getStore()?.instance;
-      if (
-        nativeEsmIdentity &&
-        requestedOwner &&
-        requestedOwner !== params.instance &&
-        liveNativeEsmOwners(nativeEsmIdentity).some((owner) => owner.instance === requestedOwner)
-      ) {
-        return nextResolve(specifier, context);
+      if (nativeEsmIdentity && requestedOwner) {
+        const knownOwner =
+          retainedNativeEsmKnownOwners.get(nativeEsmIdentity)?.has(requestedOwner) === true;
+        if (!knownOwner) {
+          return nextResolve(specifier, context);
+        }
+        const requestedIsLive = liveNativeEsmOwners(nativeEsmIdentity).some(
+          (owner) => owner.instance === requestedOwner,
+        );
+        if (!requestedIsLive) {
+          throw new Error("Plugin native ESM capture has no live workspace owner for this load");
+        }
+        if (requestedOwner !== params.instance) {
+          return nextResolve(specifier, context);
+        }
       }
       // Lazy native imports outlive the binding call. Only this graph's importers
       // borrow its SDK alias cache; callbacks may otherwise use a newer registry.

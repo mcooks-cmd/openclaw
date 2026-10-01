@@ -430,6 +430,14 @@ export const evaluations = state.evaluations;
 `,
   );
   fs.writeFileSync(
+    path.join(pluginDir, "retired-side.js"),
+    `const state = globalThis[Symbol.for("openclaw.nativeEsmOwnerRetired")] ??= { evaluations: 0 };
+state.evaluations += 1;
+export const modelId = "retired-side-model";
+export const evaluations = state.evaluations;
+`,
+  );
+  fs.writeFileSync(
     path.join(pluginDir, "after.js"),
     `const state = globalThis[Symbol.for("openclaw.nativeEsmOwnerAfter")] ??= { evaluations: 0 };
 state.evaluations += 1;
@@ -472,7 +480,41 @@ export function register(api) {
         modelId = after.modelId;
         afterEvaluations = after.evaluations;
       }
-      record({ phase: "catalog", role, call, modelId, laterEvaluations, afterEvaluations });
+      if (role === "neighbor" && call === 1) {
+        let openGate;
+        const gate = new Promise((resolve) => {
+          openGate = resolve;
+        });
+        globalThis[Symbol.for("openclaw.nativeEsmStaleGate")] = openGate;
+        globalThis[Symbol.for("openclaw.nativeEsmStaleImport")] = gate.then(() => import("./retired-side.js"));
+      }
+      let staleRejected = false;
+      let staleEvaluations = 0;
+      let staleError;
+      if (role === "allowed" && call >= 4) {
+        const openGate = globalThis[Symbol.for("openclaw.nativeEsmStaleGate")];
+        if (typeof openGate === "function") {
+          openGate();
+        }
+        try {
+          const imported = await globalThis[Symbol.for("openclaw.nativeEsmStaleImport")];
+          staleEvaluations = imported?.evaluations ?? 0;
+          staleError = "loaded";
+        } catch (error) {
+          staleRejected = true;
+          const message = error instanceof Error ? error.message : "";
+          staleError = message.includes("no live workspace owner")
+            ? "no-live-owner"
+            : message.includes("was reloaded or disabled")
+              ? "unavailable"
+              : message.includes("Cannot find module")
+                ? "missing-module"
+                : error instanceof Error
+                  ? error.name
+                  : "rejected";
+        }
+      }
+      record({ phase: "catalog", role, call, modelId, laterEvaluations, afterEvaluations, staleRejected, staleEvaluations, staleError });
       return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: [{ id: modelId, name: "Heap model" }] } };
     } },
   });
@@ -560,6 +602,29 @@ export function register(api) {
     agentDir: neighborAgent,
     agentId: "neighbor",
   });
+  const captureDir = makeTempDir("openclaw-catalog-owner-captures-");
+  const captureFiles = (dir: string): string[] => {
+    const found: string[] = [];
+    const pending = [dir];
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (!current) {
+        continue;
+      }
+      for (const child of fs.readdirSync(current, { withFileTypes: true })) {
+        if (child.isSymbolicLink()) {
+          continue;
+        }
+        const childPath = path.join(current, child.name);
+        if (child.isDirectory()) {
+          pending.push(childPath);
+        } else {
+          found.push(path.relative(dir, childPath));
+        }
+      }
+    }
+    return found.toSorted();
+  };
   const pool = new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
     maxWorkers: 1,
@@ -568,7 +633,7 @@ export function register(api) {
     workerOptions: {
       resourceLimits: { maxOldGenerationSizeMb: 512 },
       workerData: {
-        sourceCaptureDirectory: makeTempDir("openclaw-catalog-owner-captures-"),
+        sourceCaptureDirectory: captureDir,
       },
       env: fixture.env,
     },
@@ -605,6 +670,9 @@ export function register(api) {
             modelId?: string;
             laterEvaluations?: number;
             afterEvaluations?: number;
+            staleRejected?: boolean;
+            staleEvaluations?: number;
+            staleError?: string;
           },
       );
     return { result, catalogModelIds, latest: rows.at(-1) };
@@ -634,6 +702,13 @@ export function register(api) {
         (id) => id === "after-heap-model" || id.endsWith("/after-heap-model"),
       ),
     ).toBe(true);
+    const captureBeforeStaleImport = captureFiles(captureDir);
+    const staleImport = await run(allowed);
+    expect(staleImport.result.status).toBe("ok");
+    expect(staleImport.latest?.staleRejected).toBe(true);
+    expect(staleImport.latest?.staleError).toBe("no-live-owner");
+    expect(staleImport.latest?.staleEvaluations).toBe(0);
+    expect(captureFiles(captureDir)).toEqual(captureBeforeStaleImport);
     console.log(
       JSON.stringify({
         firstModelId: first.latest?.modelId,
@@ -649,6 +724,11 @@ export function register(api) {
           afterEvaluations: afterNeighborRetires.latest?.afterEvaluations,
           evaluations: afterNeighborRetires.latest?.evaluations,
           catalogModelIds: afterNeighborRetires.catalogModelIds,
+        },
+        staleImport: {
+          staleRejected: staleImport.latest?.staleRejected,
+          staleError: staleImport.latest?.staleError,
+          staleEvaluations: staleImport.latest?.staleEvaluations,
         },
       }),
     );

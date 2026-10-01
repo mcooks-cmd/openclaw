@@ -437,7 +437,9 @@ across configuration revisions of the same installed source. The worker keeps
 that first capture until the worker process exits. Each live workspace generation
 keeps its own execution owner for that capture, so a deferred import uses the
 generation that requested it, including after another workspace's generation is
-released. Each generation installs its own resolution hooks and removes them
+released. An import that still names a released workspace is rejected before
+capture. An import that does not name a workspace uses the only accepting owner.
+Each generation installs its own resolution hooks and removes them
 when that generation is released. A later generation can load a module the first
 generation did not evaluate, and a lazy import from the retained module still
 resolves. A new capture path would be a module job Node cannot unload. CommonJS plugins still
