@@ -407,3 +407,252 @@ export function register(api) {
     ).toBe(true);
   }
 }, 180_000);
+
+it("keeps a deferred native ESM import on the workspace that requested it", async () => {
+  const fixture = createCatalogFixture(makeTempDir, 0);
+  const cjsEntry = fixture.config.plugins.load.paths[0];
+  if (!cjsEntry) {
+    throw new Error("catalog fixture did not register a plugin entry");
+  }
+  const pluginDir = path.dirname(cjsEntry);
+  fs.rmSync(cjsEntry, { force: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({ name: PLUGIN_ID, type: "module" }),
+  );
+  const entry = path.join(pluginDir, "index.js");
+  fs.writeFileSync(
+    path.join(pluginDir, "later.js"),
+    `const state = globalThis[Symbol.for("openclaw.nativeEsmOwnerLater")] ??= { evaluations: 0 };
+state.evaluations += 1;
+export const modelId = "lazy-heap-model";
+export const evaluations = state.evaluations;
+`,
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "after.js"),
+    `const state = globalThis[Symbol.for("openclaw.nativeEsmOwnerAfter")] ??= { evaluations: 0 };
+state.evaluations += 1;
+export const modelId = "after-heap-model";
+export const evaluations = state.evaluations;
+`,
+  );
+  fs.writeFileSync(
+    entry,
+    `import fs from "node:fs";
+const state = globalThis[Symbol.for("openclaw.nativeEsmOwner")] ??= { evaluations: 0, catalogs: {} };
+state.evaluations += 1;
+function record(extra) {
+  fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify({
+    evaluations: state.evaluations,
+    url: import.meta.url,
+    ...extra,
+  }) + "\\n");
+}
+record({ phase: "evaluate" });
+export function register(api) {
+  const role = String(api?.pluginConfig?.role ?? "");
+  record({ phase: "register", role });
+  api.registerProvider({
+    id: ${JSON.stringify(PROVIDER_ID)},
+    label: "Heap fixture",
+    auth: [],
+    catalog: { async run() {
+      const call = (state.catalogs[role] = (state.catalogs[role] ?? 0) + 1);
+      let modelId = "heap-model";
+      let laterEvaluations;
+      let afterEvaluations;
+      if (role === "allowed" && call >= 2) {
+        const later = await import("./later.js");
+        modelId = later.modelId;
+        laterEvaluations = later.evaluations;
+      }
+      if (role === "allowed" && call >= 3) {
+        const after = await import("./after.js");
+        modelId = after.modelId;
+        afterEvaluations = after.evaluations;
+      }
+      record({ phase: "catalog", role, call, modelId, laterEvaluations, afterEvaluations });
+      return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: [{ id: modelId, name: "Heap model" }] } };
+    } },
+  });
+}
+`,
+  );
+  const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+    configSchema?: { type?: string; properties?: Record<string, unknown> };
+  };
+  manifest.configSchema = {
+    type: "object",
+    ...manifest.configSchema,
+    properties: { ...manifest.configSchema?.properties, role: { type: "string" } },
+  };
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  const baseConfig = {
+    ...fixture.config,
+    plugins: {
+      ...fixture.config.plugins,
+      load: { paths: [entry] },
+    },
+  };
+  const metadata = loadPluginMetadataSnapshot({
+    config: baseConfig,
+    env: fixture.env,
+    workspaceDir: fixture.workspaceDir,
+  });
+  const neighborWorkspace = path.join(fixture.root, "neighbor-workspace");
+  const neighborAgent = path.join(fixture.root, "neighbor-agent");
+  fs.mkdirSync(neighborWorkspace, { recursive: true });
+  fs.mkdirSync(neighborAgent, { recursive: true });
+  const workspaceInput = (workspace: {
+    role: string;
+    workspaceDir: string;
+    agentDir: string;
+    agentId: string;
+  }) =>
+    createPreparedModelCatalogWorkerInput({
+      agentFacts: {
+        input: {
+          agentId: workspace.agentId,
+          agentDir: workspace.agentDir,
+          inheritedAuthDir: workspace.agentDir,
+          workspaceDir: workspace.workspaceDir,
+          config: {
+            ...baseConfig,
+            plugins: {
+              ...baseConfig.plugins,
+              entries: { [PLUGIN_ID]: { enabled: true, config: { role: workspace.role } } },
+            },
+            models: {
+              providers: {
+                [PROVIDER_ID]: {
+                  baseUrl: "https://owner.invalid/v1",
+                  api: "openai-completions" as const,
+                  models: [],
+                },
+              },
+            },
+          },
+          env: fixture.env,
+        },
+        env: fixture.env,
+        authStore: { version: 1, profiles: {} },
+        credentials: {},
+        templateAuthStorage: AuthStorage.inMemory({}),
+        providerIds: [PROVIDER_ID],
+        configuredModelRefs: [],
+        configuredRuntimeModels: [],
+        runtimeCapabilityModels: [],
+        configuredGeneratedCatalogPluginIds: [],
+      },
+      pluginMetadataSnapshot: metadata,
+    });
+  const allowed = workspaceInput({
+    role: "allowed",
+    workspaceDir: fixture.workspaceDir,
+    agentDir: fixture.agentDir,
+    agentId: "main",
+  });
+  const neighbor = workspaceInput({
+    role: "neighbor",
+    workspaceDir: neighborWorkspace,
+    agentDir: neighborAgent,
+    agentId: "neighbor",
+  });
+  const pool = new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
+    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
+    maxWorkers: 1,
+    idleTimeoutMs: 0,
+    restartOnError: false,
+    workerOptions: {
+      resourceLimits: { maxOldGenerationSizeMb: 512 },
+      workerData: {
+        sourceCaptureDirectory: makeTempDir("openclaw-catalog-owner-captures-"),
+      },
+      env: fixture.env,
+    },
+  });
+  const run = async (value: PreparedModelCatalogWorkerTask["value"]) => {
+    const result = await pool.run(
+      {
+        value,
+        request: {
+          kind: "catalog",
+          syntheticAuth: [],
+          clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
+        },
+      },
+      { timeoutMs: 60_000 },
+    );
+    const catalogModelIds =
+      result.status === "ok" && result.kind === "catalog"
+        ? result.snapshot.entries.map((catalogEntry) => catalogEntry.id)
+        : [];
+    const rows = fs
+      .readFileSync(fixture.marker, "utf8")
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            evaluations?: number;
+            url?: string;
+            phase?: string;
+            role?: string;
+            call?: number;
+            modelId?: string;
+            laterEvaluations?: number;
+            afterEvaluations?: number;
+          },
+      );
+    return { result, catalogModelIds, latest: rows.at(-1) };
+  };
+  try {
+    const first = await run(allowed);
+    expect(first.result.status).toBe("ok");
+    expect(first.latest?.modelId).toBe("heap-model");
+    const neighborLive = await run(neighbor);
+    expect(neighborLive.result.status).toBe("ok");
+    const whileNeighborLives = await run(allowed);
+    expect(whileNeighborLives.result.status).toBe("ok");
+    expect(whileNeighborLives.latest?.modelId).toBe("lazy-heap-model");
+    expect(whileNeighborLives.latest?.laterEvaluations).toBe(1);
+    expect(whileNeighborLives.latest?.evaluations).toBe(1);
+    const retired = await run({ ...neighbor, generationFingerprint: "stale-neighbor-generation" });
+    expect(retired.result.status).toBe("generation-mismatch");
+    const afterNeighborRetires = await run(allowed);
+    expect(afterNeighborRetires.result.status).toBe("ok");
+    expect(afterNeighborRetires.latest?.modelId).toBe("after-heap-model");
+    expect(afterNeighborRetires.latest?.laterEvaluations).toBe(1);
+    expect(afterNeighborRetires.latest?.afterEvaluations).toBe(1);
+    expect(afterNeighborRetires.latest?.evaluations).toBe(1);
+    expect(afterNeighborRetires.latest?.url).toBe(first.latest?.url);
+    expect(
+      afterNeighborRetires.catalogModelIds.some(
+        (id) => id === "after-heap-model" || id.endsWith("/after-heap-model"),
+      ),
+    ).toBe(true);
+    console.log(
+      JSON.stringify({
+        firstModelId: first.latest?.modelId,
+        whileNeighborLives: {
+          modelId: whileNeighborLives.latest?.modelId,
+          laterEvaluations: whileNeighborLives.latest?.laterEvaluations,
+          evaluations: whileNeighborLives.latest?.evaluations,
+        },
+        retiredStatus: retired.result.status,
+        afterNeighborRetires: {
+          modelId: afterNeighborRetires.latest?.modelId,
+          laterEvaluations: afterNeighborRetires.latest?.laterEvaluations,
+          afterEvaluations: afterNeighborRetires.latest?.afterEvaluations,
+          evaluations: afterNeighborRetires.latest?.evaluations,
+          catalogModelIds: afterNeighborRetires.catalogModelIds,
+        },
+      }),
+    );
+  } finally {
+    await pool.close();
+  }
+}, 180_000);

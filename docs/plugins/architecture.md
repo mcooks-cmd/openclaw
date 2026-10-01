@@ -432,12 +432,15 @@ Each worker retains the current plugin registration context for each loader
 workspace, shared by agents with matching configuration, environment, and plugin
 inventory. Alternating unchanged workspaces reuse their captured source; replacing
 one workspace does not evict another. An unchanged native ESM plugin entry keeps
-one module evaluation for that worker's lifetime, including across configuration
-revisions of the same installed source. The worker keeps that first capture until
-the worker process exits, and each generation installs its own resolution hooks
-for it. A later generation can load a module the first generation did not
-evaluate, and a lazy import from the retained module still resolves. A new
-capture path would be a module job Node cannot unload. CommonJS plugins still
+one module evaluation and one capture URL for that worker's lifetime, including
+across configuration revisions of the same installed source. The worker keeps
+that first capture until the worker process exits. Each live workspace generation
+keeps its own execution owner for that capture, so a deferred import uses the
+generation that requested it, including after another workspace's generation is
+released. Each generation installs its own resolution hooks and removes them
+when that generation is released. A later generation can load a module the first
+generation did not evaluate, and a lazy import from the retained module still
+resolves. A new capture path would be a module job Node cannot unload. CommonJS plugins still
 capture per generation and drop their require cache on release. Replacing that
 plugin's source is picked up when the catalog worker process restarts. Agent
 credentials and configured model facts travel with each request; catalog jobs do
