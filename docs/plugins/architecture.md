@@ -443,7 +443,11 @@ compiled it is released. Each live workspace generation keeps its own execution 
 capture, so a deferred import uses the generation that requested it, including
 after another workspace's generation is released. An import that still names a
 released generation is rejected before capture. An import that does not name a
-generation uses the only accepting owner.
+generation uses the only accepting owner. After a refresh replaces the
+module's API handle, a registration call from a neighbor or from the released
+generation is rejected. The replacement generation publishes its catalog from
+its own registration. A later call from that same generation returns without
+running the registrar.
 Each generation installs its own resolution hooks and removes them
 when that generation is released. A later generation can load a module the first
 generation did not evaluate, and a lazy import from the retained module still

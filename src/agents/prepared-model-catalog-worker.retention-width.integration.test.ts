@@ -39,6 +39,9 @@ type CatalogRow = {
   laterValue?: string;
   laterEvaluations?: number;
   laterError?: string;
+  neighborResult?: string;
+  retiredResult?: string;
+  directEffects?: string[];
 };
 
 type Sample = CatalogRow & { catalogModelIds: string[] };
@@ -146,6 +149,14 @@ function publish(label: string, names: string[], samples: Sample[]): void {
               laterValue: sample.laterValue,
               laterEvaluations: sample.laterEvaluations,
               laterError: sample.laterError,
+            }),
+        ...(sample.neighborResult === undefined
+          ? {}
+          : {
+              neighborResult: sample.neighborResult,
+              retiredResult: sample.retiredResult,
+              directEffects: sample.directEffects,
+              handleRevision: sample.handleRevision,
             }),
         catalogModelIds: sample.catalogModelIds,
       })),
@@ -598,6 +609,166 @@ it("rejects a released workspace API handle before native ESM capture", async ()
   expect(stale?.handleRevision).toBe(0);
   expect(filesBeforeStaleImport).toBeDefined();
   expect(captureFiles(captureDir)).toEqual(filesBeforeStaleImport);
+}, 180_000);
+
+function writeDirectHandlePlugin(dir: string): string {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "package.json"),
+    JSON.stringify({ name: PLUGIN_ID, type: "module" }),
+  );
+  fs.writeFileSync(
+    path.join(dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: PLUGIN_ID,
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          marker: { type: "string" },
+          revision: { type: "number" },
+        },
+      },
+    }),
+  );
+  const entry = path.join(dir, "index.js");
+  fs.writeFileSync(
+    entry,
+    `import fs from "node:fs";
+let handle;
+let registers = 0;
+let catalogs = 0;
+const slot = globalThis[Symbol.for("openclaw.directHandleEffects")] ??= {
+  call: undefined,
+  effects: [],
+  openGate: undefined,
+  retired: undefined,
+};
+function classifyDirectError(error) {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("calling workspace generation")) return "rejected";
+  if (message.includes("no live workspace owner")) return "no-live-owner";
+  return "other";
+}
+function noteEffect(modelId) {
+  if (!slot.effects.includes(modelId)) {
+    slot.effects.push(modelId);
+  }
+}
+function directRegister(modelId) {
+  try {
+    const result = handle.registerProvider({
+      id: "direct-" + modelId,
+      label: "Direct handle",
+      auth: [],
+      catalog: { async run() {
+        noteEffect(modelId);
+        return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: [{ id: modelId, name: "Direct" }] } };
+      } },
+    });
+    return result === undefined ? "closed" : "admitted";
+  } catch (error) {
+    return classifyDirectError(error);
+  }
+}
+if (!slot.call) {
+  slot.call = directRegister;
+}
+export function register(api) {
+  registers += 1;
+  handle = api;
+  api.registerProvider({
+    id: ${JSON.stringify(PROVIDER_ID)},
+    label: "Direct handle",
+    auth: [],
+    catalog: { async run() {
+      catalogs += 1;
+      const marker = String(handle?.pluginConfig?.marker ?? "missing-handle");
+      let neighborResult = "pending";
+      let retiredResult = "pending";
+      if (marker === "alpha" && catalogs === 1) {
+        let openGate;
+        const gate = new Promise((resolve) => {
+          openGate = resolve;
+        });
+        slot.openGate = openGate;
+        slot.retired = gate.then(() => slot.call("stolen"));
+      }
+      if (marker === "beta" && catalogs === 1) {
+        neighborResult = slot.call("neighbor");
+        if (typeof slot.openGate === "function") {
+          slot.openGate();
+        }
+        try {
+          retiredResult = await slot.retired;
+        } catch (error) {
+          retiredResult = classifyDirectError(error);
+        }
+      }
+      const modelIds = [marker];
+      fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify({
+        phase: "catalog",
+        evaluations: 0,
+        bornAt: catalogs,
+        registers,
+        marker,
+        sawHandle: typeof handle?.registerProvider === "function",
+        handleRevision: Number(handle?.pluginConfig?.revision ?? -1),
+        neighborResult,
+        retiredResult,
+        directEffects: slot.effects.slice(),
+        url: import.meta.url,
+        arrayBuffers: process.memoryUsage().arrayBuffers,
+      }) + "\\n");
+      return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: modelIds.map((id) => ({ id, name: "Direct handle" })) } };
+    } },
+  });
+}
+`,
+  );
+  return entry;
+}
+
+it("rejects a neighbor and a released generation through the replaced API handle", async () => {
+  const root = makeTempDir("openclaw-retention-direct-handle-");
+  const entry = writeDirectHandlePlugin(path.join(root, "plugin"));
+  const alpha = {
+    entry,
+    workspaceDir: path.join(root, "workspace-alpha"),
+    agentDir: path.join(root, "agent-alpha"),
+    agentId: "alpha",
+  };
+  const beta = {
+    entry,
+    workspaceDir: path.join(root, "workspace-beta"),
+    agentDir: path.join(root, "agent-beta"),
+    agentId: "beta",
+  };
+  const samples = await measure(
+    "direct-handle",
+    ["alpha", "alpha-refresh", "beta-after-release", "alpha-after-foreign-calls"],
+    [
+      { ...alpha, marker: "alpha", revision: 0 },
+      { ...alpha, marker: "alpha", revision: 1 },
+      { ...beta, marker: "beta", revision: 0 },
+      { ...alpha, marker: "alpha", revision: 1 },
+    ],
+  );
+  expect(samples.map((sample) => sample.marker)).toEqual(["alpha", "alpha", "beta", "alpha"]);
+  expect(samples[0]?.url).toBe(samples[1]?.url);
+  expect(samples[0]?.url).toBe(samples[3]?.url);
+  expect(samples[0]?.url).not.toBe(samples[2]?.url);
+  expect(samples[1]?.registers).toBe(2);
+  expect(samples[1]?.handleRevision).toBe(1);
+  expect(samples[1]?.catalogModelIds).toEqual(["alpha"]);
+  expect(samples[2]?.handleRevision).toBe(0);
+  expect(samples[2]?.neighborResult).toBe("rejected");
+  expect(samples[2]?.retiredResult).toBe("rejected");
+  expect(samples[2]?.directEffects).toEqual([]);
+  expect(samples[2]?.catalogModelIds).toEqual(["beta"]);
+  expect(samples[3]?.catalogModelIds).toEqual(["alpha"]);
+  expect(samples.every((sample) => sample.catalogModelIds.includes("stolen"))).toBe(false);
+  expect(samples.every((sample) => sample.catalogModelIds.includes("neighbor"))).toBe(false);
 }, 180_000);
 
 function writeCompilerPlugin(dir: string): string {
