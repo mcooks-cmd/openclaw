@@ -180,7 +180,7 @@ async function measure(
     beforeRequest?: (index: number, captureDir: string) => void;
   },
 ): Promise<Sample[]> {
-  const fixture = createCatalogFixture(makeTempDir, 0);
+  const fixture = await Promise.resolve(createCatalogFixture(makeTempDir, 0));
   const samples: Sample[] = [];
   const captureDir = options?.captureDir ?? makeTempDir(`openclaw-retention-width-${label}-`);
   const pool = new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({

@@ -23,7 +23,7 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 const { makeTempDir } = usePreparedCatalogWorkerFixtures();
 
 it("bounds catalog worker retention across repeated fleet preparations", async () => {
-  const fixture = createCatalogFixture(makeTempDir, 0);
+  const fixture = await Promise.resolve(createCatalogFixture(makeTempDir, 0));
   fs.writeFileSync(
     path.join(fixture.root, "plugin", "index.cjs"),
     `
@@ -165,7 +165,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
 const NATIVE_ESM_BUFFER_BYTES = 4 * 1024 * 1024;
 
 it("bounds catalog worker memory across repeated native ESM plugin generations", async () => {
-  const fixture = createCatalogFixture(makeTempDir, 0);
+  const fixture = await Promise.resolve(createCatalogFixture(makeTempDir, 0));
   const cjsEntry = fixture.config.plugins.load.paths[0];
   if (!cjsEntry) {
     throw new Error("catalog fixture did not register a plugin entry");
@@ -409,7 +409,7 @@ export function register(api) {
 }, 180_000);
 
 it("keeps a deferred native ESM import on the workspace that requested it", async () => {
-  const fixture = createCatalogFixture(makeTempDir, 0);
+  const fixture = await Promise.resolve(createCatalogFixture(makeTempDir, 0));
   const cjsEntry = fixture.config.plugins.load.paths[0];
   if (!cjsEntry) {
     throw new Error("catalog fixture did not register a plugin entry");
