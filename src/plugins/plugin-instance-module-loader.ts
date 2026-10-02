@@ -224,9 +224,11 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     nativeEsmIdentity && retainedNativeEsm
       ? retainedNativeEsmArtifacts.get(nativeEsmIdentity)
       : undefined;
-  const artifact =
-    reusedArtifact ??
-    capturePluginGenerationArtifact(
+  // The owner is visible to capture before this returns. Validation can still
+  // reject, and module disposal is not registered until the bind succeeds.
+  let artifact = reusedArtifact;
+  try {
+    artifact ??= capturePluginGenerationArtifact(
       params.rootDir,
       params.standalone ? params.source : undefined,
       requestNativeEsmOwner
@@ -240,31 +242,45 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
           },
       params.nativeRecovery,
     );
-  if (
-    !reusedArtifact &&
-    params.expectedSourceDigest !== undefined &&
-    artifact.sourceDigest !== params.expectedSourceDigest
-  ) {
-    artifact.dispose();
-    throw new Error(
-      `Plugin ${params.instance.pluginId} source changed after installation; inspect it before reloading.`,
-    );
-  }
-  if (nativeEsmIdentity && !reusedArtifact) {
-    retainedNativeEsmArtifacts.set(nativeEsmIdentity, artifact);
-  }
-  bindPluginCacheRoot(params.rootDir, artifact.sourceRoot);
-  params.instance.sourceDigest = artifact.sourceDigest;
-  params.instance.onModuleDispose(() => {
+    if (
+      !reusedArtifact &&
+      params.expectedSourceDigest !== undefined &&
+      artifact.sourceDigest !== params.expectedSourceDigest
+    ) {
+      artifact.dispose();
+      throw new Error(
+        `Plugin ${params.instance.pluginId} source changed after installation; inspect it before reloading.`,
+      );
+    }
+    if (nativeEsmIdentity && !reusedArtifact) {
+      retainedNativeEsmArtifacts.set(nativeEsmIdentity, artifact);
+    }
+    bindPluginCacheRoot(params.rootDir, artifact.sourceRoot);
+    params.instance.sourceDigest = artifact.sourceDigest;
+    const retainedArtifact = artifact;
+    params.instance.onModuleDispose(() => {
+      releaseNativeEsmOwner?.();
+      if (nativeEsmIdentity && readRetainedNativeEsmModule(nativeEsmIdentity)) {
+        return undefined;
+      }
+      if (nativeEsmIdentity) {
+        retainedNativeEsmArtifacts.delete(nativeEsmIdentity);
+      }
+      return retainedArtifact.disposeAsync();
+    });
+  } catch (error) {
     releaseNativeEsmOwner?.();
-    if (nativeEsmIdentity && readRetainedNativeEsmModule(nativeEsmIdentity)) {
-      return undefined;
-    }
-    if (nativeEsmIdentity) {
+    if (
+      nativeEsmIdentity &&
+      artifact &&
+      artifact !== reusedArtifact &&
+      retainedNativeEsmArtifacts.get(nativeEsmIdentity) === artifact
+    ) {
       retainedNativeEsmArtifacts.delete(nativeEsmIdentity);
+      artifact.dispose();
     }
-    return artifact.disposeAsync();
-  });
+    throw error;
+  }
   const bindModuleLoader = preparePluginModuleLoaderRecovery(
     params,
     artifact,
