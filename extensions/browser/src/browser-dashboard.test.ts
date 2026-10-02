@@ -552,7 +552,6 @@ describe("Browser dashboard lifetime", () => {
     const { app, getHandlers } = createBrowserRouteApp();
     registerBrowserTabRoutes(app, {
       forProfile: () => ({ profile, isReachable, listTabs }),
-      mapTabError: () => null,
     } as unknown as BrowserRouteContext);
     const response = createBrowserRouteResponse();
     await getHandlers.get("/tabs")!(
@@ -676,7 +675,7 @@ describe("Browser dashboard lifetime", () => {
             openKeyedStore: (options: OpenKeyedStoreOptions) =>
               createPluginStateKeyedStoreForTests("browser", options),
           },
-          gateway: { isAvailable: async () => true, request: fixture.readBoard },
+          gateway: fixture.gateway,
         } as unknown as PluginRuntime,
         registerService: (value) => {
           services.push(value);

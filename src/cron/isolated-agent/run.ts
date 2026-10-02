@@ -244,6 +244,7 @@ async function runCronIsolatedAgentTurnInTrace(
               {
                 sessionKey: prepared.context.runSessionKey,
                 sessionId: initialSessionId,
+                agentId: prepared.context.agentId,
                 lifecycleGeneration: runLifecycleGeneration,
                 cronRunsByJobId: new Map([
                   [params.job.id, { pacingEnabled: params.job.pacing !== undefined }],
@@ -260,6 +261,7 @@ async function runCronIsolatedAgentTurnInTrace(
               runId,
               cfg: params.cfg,
               job: params.job,
+              deliveryAttemptFence: params.deliveryAttemptFence,
               lane: params.lane,
               agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
               persistRunContinuationSession: prepared.context.runContinuationSession?.sync,

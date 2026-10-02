@@ -12,10 +12,11 @@ import {
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
 import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
-import { classifyFailoverReason, type FailoverReason } from "../../embedded-agent-helpers.js";
+import { classifyFailoverReason } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import { getFailoverErrorCode } from "../../failover/error.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { resolveProviderModelAuthPolicy } from "../../model-auth-policy.js";
 import {
@@ -441,9 +442,6 @@ export function createEmbeddedRunAuthController(params: {
         reason,
         provider,
         allInCooldown: failoverParams.allInCooldown,
-        causeText: failoverParams.error
-          ? formatErrorMessage(failoverParams.error).trim()
-          : undefined,
         recoveryHint: buildProviderAuthRecoveryHint({
           provider,
           config: params.config,

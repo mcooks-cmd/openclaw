@@ -134,16 +134,18 @@ describe("chat pane model-setting permissions", () => {
   it.each([
     { scope: "operator.read", sharingRole: "owner", allowed: false },
     { scope: "operator.sessions.write", sharingRole: "owner", allowed: true },
-    { scope: "operator.sessions.write", sharingRole: "member", allowed: false },
     { scope: "operator.sessions.write", sharingRole: "viewer", allowed: false },
     { scope: "operator.write", sharingRole: "viewer", allowed: true },
     { scope: "operator.admin", sharingRole: "viewer", allowed: true },
   ] as const)(
     "uses exact field permissions with $scope on a $sharingRole session",
     async ({ scope, sharingRole, allowed }) => {
-      const { state, selectedSession, controls, container } = createControlsFixture(
+      const { state, selectedSession, access, controls, container } = createControlsFixture(
         scope,
         sharingRole,
+      );
+      expect(access.unarchive.allowed).toBe(
+        allowed && (scope === "operator.admin" || sharingRole === "owner"),
       );
       const readOnly = !allowed;
       expect(

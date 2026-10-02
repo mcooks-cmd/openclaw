@@ -220,7 +220,6 @@ export class CallManager {
         const elapsed = Date.now() - maxDurationAnchor;
         const maxDurationMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
         if (elapsed >= maxDurationMs) {
-          // Already expired — remove instead of keeping
           verified.delete(callId);
           skippedAlreadyElapsedTimers += 1;
           continue;
@@ -397,7 +396,7 @@ export class CallManager {
   async initiateCall(
     to: string,
     sessionKey?: string,
-    options?: OutboundCallOptions | string,
+    options?: OutboundCallOptions,
   ): Promise<{ callId: CallId; success: boolean; error?: string }> {
     return this.runOperation(() =>
       initiateCallWithContext(this.getContext(), to, sessionKey, options),

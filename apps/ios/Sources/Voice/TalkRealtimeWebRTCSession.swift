@@ -211,7 +211,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private struct AgentWaitResponse: Decodable {
-        let runId: String?
         let status: String?
         let startedAt: Double?
         let error: String?
@@ -850,7 +849,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     }
                     guard chatEvent.runId == runId else { continue }
                     if let eventSessionKey = chatEvent.sessionKey,
-                       !Self.matchesSessionKey(eventSessionKey, target.sessionKey)
+                       !OpenClawChatSessionKey.matchesIncludingDefaultMainAlias(eventSessionKey, target.sessionKey)
                     {
                         continue
                     }
@@ -903,16 +902,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
-    private nonisolated static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {
-        let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if incoming == current {
-            return true
-        }
-        return (incoming == "agent:main:main" && current == "main") ||
-            (incoming == "main" && current == "agent:main:main")
-    }
-
     private static func waitForAgentResult(
         gateway: GatewayNodeSession,
         target: OpenClawChatSessionTarget,
@@ -961,8 +950,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 throw NSError(domain: "TalkRealtimeWebRTC", code: 15, userInfo: [
                     NSLocalizedDescriptionKey: wait.stopReason ?? "OpenClaw realtime tool call aborted",
                 ])
-            case "timeout":
-                break
             default:
                 break
             }

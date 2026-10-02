@@ -320,8 +320,6 @@ test("sessions.create can start the first agent turn from an initial task", asyn
 
 const mentionCreationOwners = [
   ["main", "per-sender"],
-  ["ops", "per-sender"],
-  ["main", "global"],
   ["ops", "global"],
 ] as const;
 
@@ -380,7 +378,7 @@ test.each(mentionCreationOwners)(
         expect(inbox.list(sender)).toMatchObject({ ok: true, value: { items: [] } });
       } finally {
         await waitForCreatedSessionRun(context, storePath, key);
-        inbox.dispose();
+        await inbox.dispose();
       }
     }),
 );

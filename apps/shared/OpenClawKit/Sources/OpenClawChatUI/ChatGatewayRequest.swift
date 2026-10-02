@@ -310,19 +310,30 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: Double(requestTimeoutMs))
     }
 
-    public static func patchSessionPreferences(
+    public static func patchSessionSettings(
         sessionKey: String,
         agentID: String?,
-        thinkingLevel: String?? = nil,
-        fastMode: OpenClawChatFastMode?? = nil,
-        verboseLevel: String?? = nil) -> OpenClawChatGatewayRequest
+        patch: OpenClawChatSessionSettingsPatch,
+        supportsSessionSettingsContract: Bool,
+        supportsSessionSettingsCAS: Bool) throws -> OpenClawChatGatewayRequest
     {
-        self.patchSessionSettings(
+        guard !patch.requiresSessionSettingsContract || supportsSessionSettingsContract,
+              !patch.requiresSessionSettingsCAS || supportsSessionSettingsCAS
+        else { throw OpenClawChatTransportSendError.notDispatched }
+        return self.patchSessionSettings(
             sessionKey: sessionKey,
             agentID: agentID,
-            thinkingLevel: thinkingLevel,
-            fastMode: fastMode,
-            verboseLevel: verboseLevel)
+            expectedSessionID: patch.expectedSessionID,
+            expectedPermissionMode: patch.expectedPermissionMode,
+            expectedToolOverrides: patch.expectedToolOverrides,
+            model: patch.model,
+            thinkingLevel: patch.thinkingLevel,
+            fastMode: patch.fastMode,
+            verboseLevel: patch.verboseLevel,
+            permissionMode: patch.permissionMode,
+            toolOverrides: patch.toolOverrides,
+            supportsSessionSettingsContract: supportsSessionSettingsContract,
+            supportsSessionSettingsCAS: supportsSessionSettingsCAS)
     }
 
     public static func patchSessionSettings(
@@ -411,6 +422,7 @@ public enum OpenClawChatGatewayRequests {
         color: String?? = nil,
         pinned: Bool?,
         archived: Bool?,
+        snoozedUntil: OpenClawChatSnoozePatch? = nil,
         unreadPatch: OpenClawChatSessionUnreadPatch?) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID)
@@ -426,6 +438,14 @@ public enum OpenClawChatGatewayRequests {
         }
         params["pinned"] = pinned.map(AnyCodable.init)
         params["archived"] = archived.map(AnyCodable.init)
+        if let snoozedUntil {
+            switch snoozedUntil {
+            case let .until(wakeAt):
+                params["snoozedUntil"] = AnyCodable(Int(wakeAt.timeIntervalSince1970 * 1000))
+            case .wake:
+                params["snoozedUntil"] = AnyCodable(NSNull())
+            }
+        }
         switch unreadPatch {
         case .markUnread:
             params["unread"] = AnyCodable(true)
@@ -603,6 +623,30 @@ public enum OpenClawChatGatewayRequests {
             method: "chat.history",
             params: params,
             timeoutMs: timeoutMs.map(Double.init) ?? self.defaultTimeoutMs)
+    }
+
+    public static func reactionsList(sessionKey: String, agentID: String?) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "session.reactions.list",
+            params: self.sessionParams(sessionKey: sessionKey, agentID: agentID, key: "sessionKey"),
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
+    public static func reactionsSet(
+        sessionKey: String,
+        agentID: String?,
+        messageID: String,
+        emoji: String,
+        remove: Bool) -> OpenClawChatGatewayRequest
+    {
+        var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID, key: "sessionKey")
+        params["messageId"] = AnyCodable(messageID)
+        params["emoji"] = AnyCodable(emoji)
+        params["remove"] = AnyCodable(remove)
+        return OpenClawChatGatewayRequest(
+            method: "session.reactions.set",
+            params: params,
+            timeoutMs: self.defaultTimeoutMs)
     }
 
     public static func progressCardGet(sessionKey: String, agentID: String?) -> OpenClawChatGatewayRequest {

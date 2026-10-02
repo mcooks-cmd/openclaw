@@ -11,7 +11,6 @@ import { createRequireRecord } from "../../test/helpers/record.js";
 import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { CronService } from "../cron/service.js";
 import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
 import { resolveSkillCollectionReviewMonitorSpecs } from "../cron/skill-collection-review-monitor.js";
@@ -260,10 +259,8 @@ import {
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import type { CronExecutionIdentityAdmission, CronServiceState } from "../cron/service/state.js";
 import type { CronJob, CronJobCreate } from "../cron/types.js";
-import {
-  buildGatewayCronService as buildGatewayCronServiceRuntime,
-  fireOnExitJob,
-} from "./server-cron.js";
+import { fireOnExitJob } from "./server-cron-event-dispatch.js";
+import { buildGatewayCronService as buildGatewayCronServiceRuntime } from "./server-cron.js";
 
 function buildGatewayCronService(params: Parameters<typeof buildGatewayCronServiceRuntime>[0]) {
   const legacyStore = (params.cfg.cron as { store?: unknown } | undefined)?.store;
@@ -630,25 +627,24 @@ describe("buildGatewayCronService", () => {
       ...createCronConfig("server-cron-skill-review-forwarding"),
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } satisfies OpenClawConfig;
-    const state = loadCronService(cfg);
-    const abortController = new AbortController();
-    const onExecutionStarted = vi.fn();
-    const onExecutionPhase = vi.fn();
-    const onLaneWait = vi.fn();
-    const executionIdentity = {
-      ingress: { kind: "schedule", boundary: "cron.test", state: "present" },
-    } satisfies CronExecutionIdentityAdmission;
-    await expect(state.reconcileSystemJobs()).resolves.toBe("converged");
-    const job = (await state.cron.list({ includeDisabled: true })).find(
-      (candidate) => candidate.declarationKey === "skill-collection-review:main",
-    );
-    if (!job) {
-      throw new Error("expected the skill collection review monitor");
-    }
-
-    try {
+    await withCronService(cfg, async (state) => {
+      const abortController = new AbortController();
+      const onExecutionStarted = vi.fn();
+      const onExecutionPhase = vi.fn();
+      const onLaneWait = vi.fn();
+      const executionIdentity = {
+        ingress: { kind: "schedule", boundary: "cron.test", state: "present" },
+      } satisfies CronExecutionIdentityAdmission;
+      await expect(state.reconcileSystemJobs()).resolves.toBe("converged");
+      const job = (await state.cron.list({ includeDisabled: true })).find(
+        (candidate) => candidate.declarationKey === "skill-collection-review:main",
+      );
+      if (!job) {
+        throw new Error("expected the skill collection review monitor");
+      }
       await getCronDeps(state).runIsolatedAgentJob({
         job,
+        deliveryAttemptFence: null,
         message: "review",
         abortSignal: abortController.signal,
         onExecutionStarted,
@@ -667,9 +663,7 @@ describe("buildGatewayCronService", () => {
           skillsSnapshot: { prompt: "", skills: [] },
         }),
       );
-    } finally {
-      state.cron.stop();
-    }
+    });
   });
 
   it.each([
@@ -928,44 +922,6 @@ describe("buildGatewayCronService", () => {
     } finally {
       state.cron.stop();
       vi.useRealTimers();
-    }
-  });
-
-  it("pins ownerless jobs only when a retained legacy owner is present", async () => {
-    const tmpDir = path.join(os.tmpdir(), `server-cron-retained-owner-${Date.now()}`);
-    const cfg = retainLegacyDefaultAgentId(
-      {
-        cron: { store: path.join(tmpDir, "cron.json") },
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-      } as OpenClawConfig,
-      "ops",
-    );
-    loadConfigMock.mockReturnValue(cfg);
-    const initial = createCronService(cfg);
-    await initial.cron.start();
-    const job = await addCronJob(
-      initial,
-      "legacy retained owner",
-      { kind: "agentTurn", message: "pin once" },
-      {
-        schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-      },
-    );
-    expect(job.agentId).toBe("ops");
-    initial.cron.stop();
-
-    const restartedCfg = structuredClone(cfg);
-    loadConfigMock.mockReturnValue(restartedCfg);
-    const restarted = createCronService(restartedCfg);
-    try {
-      await restarted.cron.start();
-      expect((await restarted.cron.readJob(job.id))?.agentId).toBe("ops");
-    } finally {
-      restarted.cron.stop();
     }
   });
 

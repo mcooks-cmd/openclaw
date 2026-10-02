@@ -16,7 +16,7 @@ private actor DashboardReconnectAuthGate {
     }
 }
 
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardReconnectTests {
     @Test func `primary discovery failure preserves commands owned by a pending picker`() async throws {
@@ -81,7 +81,7 @@ struct DashboardReconnectTests {
                     routeRevision: 1))
             }
             await discoveryGate.waitUntilRequested()
-            selection = Task { await manager._testSwitchTarget(target, in: original) }
+            selection = Task { _ = await manager.switchTarget(target, in: original)?.value }
             await profileGate.waitUntilRequested()
             manager.dispatchNativeCommand(.newSession)
             manager.dispatchNativeCommand(.commandPalette)
@@ -101,7 +101,7 @@ struct DashboardReconnectTests {
             var samples = 0
             var observation = "not sampled"
             try await DashboardTestWait.document(replacement, "replacement document")
-            try await DashboardTestWait.state("replacement command delivery") {
+            try await TestWait.state("replacement command delivery") {
                 samples += 1
                 do {
                     let received = try await replacement.webView.evaluateJavaScript("window.commandEvents") as? [String]

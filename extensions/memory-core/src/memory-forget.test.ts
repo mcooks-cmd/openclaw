@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
@@ -26,6 +29,22 @@ import {
 import { runSessionBackfill } from "./session-backfill.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
 
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
+  const { memoryForgetPlanningObserverEntrypoint } =
+    await import("./memory-forget-planning-observer-entrypoint.test-support.js");
+  return {
+    ...actual,
+    resolveRuntimeWorkerUrl(entry: Parameters<typeof actual.resolveRuntimeWorkerUrl>[0]) {
+      return actual.resolveRuntimeWorkerUrl(
+        entry.sourceWorkerName === "manager-search.worker"
+          ? memoryForgetPlanningObserverEntrypoint
+          : entry,
+      );
+    },
+  };
+});
+
 describe("memory forget", () => {
   let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
   let workspaceDir: string;
@@ -38,6 +57,48 @@ describe("memory forget", () => {
 
   afterEach(async () => {
     await fixture.cleanup();
+  });
+
+  it("previews an unresolved session without creating the absent agent store", async () => {
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    const report = await forgetMemoryEntries({
+      cfg,
+      agentId: "main",
+      sessionIds: ["missing"],
+      dryRun: true,
+    });
+    expect(report).toEqual({
+      agentId: "main",
+      dryRun: true,
+      sessionIds: ["missing"],
+      participantMatches: [],
+      sessionResolutions: [{ sessionId: "missing", source: "unresolved" }],
+      entryKeys: [],
+      mixedLineageEntryKeys: [],
+      untargetableEntryKeys: [],
+      curatedWrites: [],
+      artifacts: {
+        memoryFiles: 0,
+        memoryEntries: 0,
+        memoryLines: 0,
+        sessionCorpusFiles: 0,
+        sessionCorpusLines: 0,
+        indexChunks: 0,
+        indexSources: 0,
+        ftsRows: 0,
+        vectorRows: 0,
+        embeddingCacheRows: 0,
+        shortTermEntries: 0,
+        seenHashScopes: 0,
+        backups: 0,
+        originRows: 0,
+      },
+      refusals: [],
+    });
+    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${databasePath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${databasePath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("previews and forgets sessions without fetching unrelated session bodies", async () => {
@@ -60,49 +121,41 @@ describe("memory forget", () => {
       "## Session ID: target\nForget this.",
     );
     insert.run("memory-keep", "MEMORY.md", "memory", "Keep this memory.\0🚀");
-    // Observe cached executions too: Kysely retains a statement after its second use.
-    for (let pass = 0; pass < 2; pass += 1) {
-      await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"], dryRun: true });
-    }
-    // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted native statement receiver.
-    const { all: originalAll, iterate: originalIterate } = StatementSync.prototype;
-    let fetchedBytes = 0;
-    let fetchedRows = 0;
-    const observeRow = (row: Record<string, unknown>) => {
-      fetchedRows += 1;
-      for (const value of Object.values(row)) {
-        if (typeof value === "string") {
-          fetchedBytes += Buffer.byteLength(value);
-        }
-      }
-    };
-    const allSpy = vi.spyOn(StatementSync.prototype, "all").mockImplementation(function (
-      this: StatementSync,
-      ...args
-    ) {
-      const rows = originalAll.apply(this, args);
-      if (this.sourceSQL.includes('left join "memory_index_chunk_provenance"')) {
-        rows.forEach(observeRow);
-      }
-      return rows;
+    // Six slots: all/iterate calibration, rows, UTF-8 bytes, tasks, completed replies.
+    const counters = new Int32Array(new SharedArrayBuffer(6 * Int32Array.BYTES_PER_ELEMENT));
+    const runtime = await import("./memory/manager-cpu-worker-runtime.js");
+    const plan = runtime.runMemoryForgetIndexPlan;
+    const dispatch = vi.spyOn(runtime, "runMemoryForgetIndexPlan").mockImplementation((request) => {
+      const observedRequest = { ...request, forgetReadObservation: counters.buffer };
+      return plan(observedRequest);
     });
-    const iterateSpy = vi.spyOn(StatementSync.prototype, "iterate").mockImplementation(function (
-      this: StatementSync,
-      ...args
-    ) {
-      const rows = originalIterate.apply(this, args);
-      if (!this.sourceSQL.includes('left join "memory_index_chunk_provenance"')) {
-        return rows;
-      }
-      return (function* () {
-        for (const row of rows) {
-          observeRow(row);
-          yield row;
-        }
-        return undefined;
-      })();
-    });
+    const allSpy = vi.spyOn(StatementSync.prototype, "all");
+    const iterateSpy = vi.spyOn(StatementSync.prototype, "iterate");
+    const hostPlannerReads = () =>
+      [...allSpy.mock.contexts, ...iterateSpy.mock.contexts].filter(
+        (statement) =>
+          statement instanceof StatementSync &&
+          statement.sourceSQL.includes('left join "memory_index_chunk_provenance"'),
+      ).length;
     try {
+      // Warm the worker, then measure only preview and apply.
+      for (let pass = 0; pass < 2; pass++) {
+        await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"], dryRun: true });
+      }
+      expect([Atomics.load(counters, 0), Atomics.load(counters, 1)]).toEqual([1, 1]);
+      const calibration = db.prepare(
+        'select chunk.id from memory_index_chunks as chunk left join "memory_index_chunk_provenance" as provenance on provenance.chunk_id = chunk.id where 0',
+      );
+      allSpy.mockClear();
+      iterateSpy.mockClear();
+      expect(calibration.all()).toEqual([]);
+      expect([...calibration.iterate()]).toEqual([]);
+      expect(hostPlannerReads()).toBe(2);
+      allSpy.mockClear();
+      iterateSpy.mockClear();
+      for (let slot = 2; slot < counters.length; slot++) {
+        Atomics.store(counters, slot, 0);
+      }
       const preview = await forgetMemoryEntries({
         cfg,
         agentId: "main",
@@ -123,11 +176,16 @@ describe("memory forget", () => {
       expect(
         db.prepare("SELECT text FROM memory_index_chunks WHERE id = 'session-1'").get(),
       ).toEqual({ text: body });
+      const fetchedRows = Atomics.load(counters, 2);
+      const fetchedBytes = Atomics.load(counters, 3);
       expect(fetchedRows).toBe(68);
       expect(fetchedBytes).toBeLessThan(16_384);
+      expect([Atomics.load(counters, 4), Atomics.load(counters, 5)]).toEqual([2, 2]);
+      expect(hostPlannerReads()).toBe(0);
     } finally {
       allSpy.mockRestore();
       iterateSpy.mockRestore();
+      dispatch.mockRestore();
     }
   });
 

@@ -241,8 +241,8 @@ async function stopManagedServiceBeforeMutableUpdate(
     }
     executorFence?.assertCurrent();
   };
-  const assertCurrent = () => {
-    params.assertCurrent?.();
+  const assertCurrent = (phase?: "restore") => {
+    params.assertCurrent?.(phase);
     assertNative?.();
     assertExecutor();
   };
@@ -659,7 +659,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     }
   } catch (err) {
     try {
-      assertCurrent();
+      assertCurrent("restore");
     } catch (cause) {
       const failures = [err, cause];
       try {

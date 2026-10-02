@@ -1,9 +1,12 @@
+import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { ensureSqliteLibrarySelected } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import type { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import type {
   MemoryOriginReadTarget,
   MemoryOriginReadFilters,
 } from "../memory-entry-origins-task.js";
+import type { ForgetIndexReadInput } from "../memory-forget-index-task.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import type {
   MemoryIndexPreparationInput,
@@ -17,11 +20,20 @@ import type {
 } from "./manager-search.worker.js";
 const MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES = 256 * 1024 * 1024;
 
-export type MemoryIndexTask = { kind: "prepare"; input: MemoryIndexPreparationInput };
-export type MemoryIndexTaskResult = {
-  kind: "prepared";
-  value: ReturnType<typeof prepareMemoryIndexChunks>;
-};
+type MemoryTranscriptStatsScope = Omit<
+  Parameters<typeof readTranscriptStatsBatchReadOnlySync>[0][number],
+  "env"
+>;
+export type MemoryIndexTask =
+  | { kind: "prepare"; input: MemoryIndexPreparationInput }
+  | {
+      kind: "transcript-stats";
+      scopes: readonly MemoryTranscriptStatsScope[];
+      env: { OPENCLAW_STATE_DIR: string; OPENCLAW_SUPERVISOR_MODE?: string };
+    };
+export type MemoryIndexTaskResult =
+  | { kind: "prepared"; value: ReturnType<typeof prepareMemoryIndexChunks> }
+  | { kind: "transcript-stats"; stats: ReturnType<typeof readTranscriptStatsBatchReadOnlySync> };
 
 const retrieval = new WorkerTaskPool<MemorySearchWorkerInput, MemorySearchWorkerOutput>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),
@@ -37,6 +49,29 @@ const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
 });
 
 type MemoryReadTarget = { databasePath: string; agentId: string };
+
+export async function runMemoryForgetIndexPlan(request: ForgetIndexReadInput) {
+  ensureSqliteLibrarySelected();
+  let inputBytes =
+    2 * (request.agentId.length + request.databasePath.length + request.stateDir.length);
+  for (const values of [
+    request.changedPaths,
+    request.removedPaths,
+    request.sessionIds,
+    request.excludedSessionIds,
+    request.entryKeys,
+    request.corpusSnippets,
+  ]) {
+    for (const value of values) {
+      inputBytes += value.length * 2;
+    }
+  }
+  const result = await retrieval.run(request, { inputBytes });
+  if (result.kind !== "forget-index-plan") {
+    throw new Error("Invalid memory Forget index plan worker result");
+  }
+  return result.plan;
+}
 
 function originReadBytes(target: MemoryOriginReadTarget, filters: MemoryOriginReadFilters = {}) {
   return (
@@ -234,4 +269,26 @@ export async function prepareMemoryIndexInWorker(input: MemoryIndexPreparationIn
     throw new Error("Invalid memory indexing worker result");
   }
   return result.value;
+}
+
+/** Startup scans use the background indexing pool under the shared compute limit. */
+export async function readMemoryTranscriptStatsInWorker(
+  scopes: readonly MemoryTranscriptStatsScope[],
+) {
+  if (scopes.length === 0) {
+    return [];
+  }
+  ensureSqliteLibrarySelected();
+  const env = {
+    OPENCLAW_STATE_DIR: resolveStateDir(),
+    OPENCLAW_SUPERVISOR_MODE: process.env.OPENCLAW_SUPERVISOR_MODE,
+  };
+  const result = await indexing.run(
+    { kind: "transcript-stats", scopes, env },
+    { inputBytes: 2 * (JSON.stringify(scopes).length + JSON.stringify(env).length) },
+  );
+  if (result.kind !== "transcript-stats") {
+    throw new Error("Invalid memory transcript stats worker result");
+  }
+  return result.stats;
 }

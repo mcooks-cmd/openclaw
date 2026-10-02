@@ -10,6 +10,7 @@ import {
   resolvePluginLoaderTryNative,
   isPluginSourceModulePath,
   supportsBunRuntimeOnResolveTargets,
+  useNodeModuleHooks,
 } from "./native-module-require.js";
 import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import { bindPluginCacheRoot, getPluginCache, withPluginCache } from "./plugin-cache.js";
@@ -177,7 +178,6 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       );
     };
   }
-  const nativeHooks = typeof Module.registerHooks === "function";
   // Compiled TypeScript lives beside the retained module. A later generation has
   // to see the same output map, or a helper's old URL no longer resolves.
   const sourceBuilds = nativeEsmSourceBuilds(nativeEsmIdentity);
@@ -303,7 +303,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     allowedParentRoots: [artifact.boundaryRoot],
     pluginSdkResolution: params.pluginSdkResolution,
   });
-  if (!nativeHooks) {
+  if (!useNodeModuleHooks()) {
     const capturedSource = artifact.resolve(params.source);
     artifact.prepareModule(capturedSource);
     const bunSourceFacts =
@@ -316,7 +316,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
         : undefined;
     for (const { specifier } of bunSourceFacts?.staticImports ?? []) {
       if (path.isAbsolute(specifier) || specifier.startsWith("file:")) {
-        artifact.captureModule(capturedSource, specifier, ["node", "import"]);
+        artifact.captureModule(capturedSource, specifier, ["node", "module-sync", "import"]);
       }
     }
     const bunNeedsNativeSource =
