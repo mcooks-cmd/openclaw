@@ -31,9 +31,14 @@ type CatalogRow = {
   url: string;
   arrayBuffers: number;
   sawHandle?: boolean;
+  handleRevision?: number;
+  apiCalls?: number;
   staleRejected?: boolean;
   staleError?: string;
   staleEvaluations?: number;
+  laterValue?: string;
+  laterEvaluations?: number;
+  laterError?: string;
 };
 
 type Sample = CatalogRow & { catalogModelIds: string[] };
@@ -132,6 +137,15 @@ function publish(label: string, names: string[], samples: Sample[]): void {
               staleRejected: sample.staleRejected,
               staleError: sample.staleError,
               staleEvaluations: sample.staleEvaluations,
+              apiCalls: sample.apiCalls,
+              handleRevision: sample.handleRevision,
+            }),
+        ...(sample.laterValue === undefined
+          ? {}
+          : {
+              laterValue: sample.laterValue,
+              laterEvaluations: sample.laterEvaluations,
+              laterError: sample.laterError,
             }),
         catalogModelIds: sample.catalogModelIds,
       })),
@@ -421,9 +435,12 @@ function writeRetiredHandlePlugin(dir: string): string {
   );
   fs.writeFileSync(
     path.join(dir, "retired-side.js"),
-    `const state = globalThis[Symbol.for("openclaw.nativeEsmHandleRetired")] ??= { evaluations: 0 };
+    `import { callRetainedHandle } from "./index.js";
+const state = globalThis[Symbol.for("openclaw.nativeEsmHandleRetired")] ??= { evaluations: 0, apiCalls: 0 };
 state.evaluations += 1;
+state.apiCalls = callRetainedHandle();
 export const evaluations = state.evaluations;
+export const apiCalls = state.apiCalls;
 `,
   );
   const entry = path.join(dir, "index.js");
@@ -433,6 +450,19 @@ export const evaluations = state.evaluations;
 let handle;
 let registers = 0;
 let catalogs = 0;
+const retiredState = globalThis[Symbol.for("openclaw.nativeEsmHandleRetired")] ??= { evaluations: 0, apiCalls: 0 };
+export function callRetainedHandle() {
+  retiredState.apiCalls += 1;
+  handle.registerProvider({
+    id: "stale-caller",
+    label: "Stale caller",
+    auth: [],
+    catalog: { async run() {
+      return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: [{ id: "stolen", name: "Stolen" }] } };
+    } },
+  });
+  return retiredState.apiCalls;
+}
 export function register(api) {
   registers += 1;
   handle = api;
@@ -480,6 +510,8 @@ export function register(api) {
         registers,
         marker,
         sawHandle: typeof handle?.registerProvider === "function",
+        handleRevision: Number(handle?.pluginConfig?.revision ?? -1),
+        apiCalls: retiredState.apiCalls,
         staleRejected,
         staleError,
         staleEvaluations,
@@ -560,6 +592,143 @@ it("rejects a released workspace API handle before native ESM capture", async ()
   expect(stale?.staleRejected).toBe(true);
   expect(stale?.staleError).toBe("no-live-owner");
   expect(stale?.staleEvaluations).toBe(0);
+  expect(stale?.apiCalls).toBe(0);
+  expect(stale?.catalogModelIds).toEqual(["beta"]);
+  expect(samples[2]?.handleRevision).toBe(1);
+  expect(stale?.handleRevision).toBe(0);
   expect(filesBeforeStaleImport).toBeDefined();
   expect(captureFiles(captureDir)).toEqual(filesBeforeStaleImport);
+}, 180_000);
+
+function writeCompilerPlugin(dir: string): string {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "package.json"),
+    JSON.stringify({ name: PLUGIN_ID, type: "module" }),
+  );
+  fs.writeFileSync(
+    path.join(dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: PLUGIN_ID,
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          marker: { type: "string" },
+          revision: { type: "number" },
+        },
+      },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(dir, "later.ts"),
+    `const state = globalThis[Symbol.for("openclaw.nativeEsmCompilerLater")] ??= { evaluations: 0 };
+state.evaluations += 1;
+export const marker = "compiled-later";
+export const evaluations = state.evaluations;
+`,
+  );
+  fs.writeFileSync(
+    path.join(dir, "helper.ts"),
+    `export function armLater(): Promise<string> {
+  return import("./later.ts").then((loaded) => {
+    const marker = loaded.marker;
+    return typeof marker === "string" ? marker : "missing-later";
+  });
+}
+`,
+  );
+  const entry = path.join(dir, "index.js");
+  fs.writeFileSync(
+    entry,
+    `import fs from "node:fs";
+import { armLater } from "./helper.ts";
+let handle;
+let registers = 0;
+let catalogs = 0;
+const bornState = globalThis[Symbol.for("openclaw.nativeEsmCompilerBorn")] ??= { count: 0 };
+bornState.count += 1;
+const bornAt = bornState.count;
+export function register(api) {
+  registers += 1;
+  handle = api;
+  api.registerProvider({
+    id: ${JSON.stringify(PROVIDER_ID)},
+    label: "Retained compiler",
+    auth: [],
+    catalog: { async run() {
+      catalogs += 1;
+      const marker = String(handle?.pluginConfig?.marker ?? "missing-handle");
+      let laterValue = "pending";
+      let laterError;
+      if (catalogs === 3) {
+        try {
+          laterValue = await armLater();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "";
+          laterError = message.includes("no live workspace owner")
+            ? "no-live-owner"
+            : message.includes("Cannot find module")
+              ? "missing-module"
+              : "rejected";
+        }
+      }
+      const laterState = globalThis[Symbol.for("openclaw.nativeEsmCompilerLater")];
+      const row = {
+        phase: "catalog",
+        evaluations: bornState.count,
+        bornAt,
+        registers,
+        marker,
+        sawHandle: typeof handle?.registerProvider === "function",
+        laterValue,
+        laterEvaluations: laterState?.evaluations ?? 0,
+        url: import.meta.url,
+        arrayBuffers: process.memoryUsage().arrayBuffers,
+      };
+      if (laterError) {
+        row.laterError = laterError;
+      }
+      fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify(row) + "\\n");
+      const modelId = laterValue === "pending" ? marker : laterValue;
+      return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: [{ id: modelId, name: "Retained compiler" }] } };
+    } },
+  });
+}
+`,
+  );
+  return entry;
+}
+
+it("keeps a compiled TypeScript helper import after the native module is retained", async () => {
+  const root = makeTempDir("openclaw-retention-compiler-");
+  const entry = writeCompilerPlugin(path.join(root, "plugin"));
+  const workspace = {
+    entry,
+    workspaceDir: path.join(root, "workspace"),
+    agentDir: path.join(root, "agent"),
+    agentId: "alpha",
+    marker: "alpha",
+  };
+  const samples = await measure(
+    "retained-compiler",
+    ["compile", "refresh", "import-after-release"],
+    [
+      { ...workspace, revision: 0 },
+      { ...workspace, revision: 1 },
+      { ...workspace, revision: 1 },
+    ],
+  );
+  expect(samples.map((sample) => sample.marker)).toEqual(["alpha", "alpha", "alpha"]);
+  expect(samples.map((sample) => sample.evaluations)).toEqual([1, 1, 1]);
+  expect(samples.map((sample) => sample.registers)).toEqual([1, 2, 2]);
+  expect(samples[0]?.url).toBe(samples[2]?.url);
+  expect(samples.map((sample) => sample.laterEvaluations)).toEqual([0, 0, 1]);
+  expect(samples[2]?.laterValue).toBe("compiled-later");
+  expect(samples[2]?.laterError).toBeUndefined();
+  expect(samples.map((sample) => sample.catalogModelIds)).toEqual([
+    ["alpha"],
+    ["alpha"],
+    ["compiled-later"],
+  ]);
 }, 180_000);

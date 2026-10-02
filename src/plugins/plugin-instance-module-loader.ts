@@ -52,6 +52,25 @@ const retainedNativeEsmArtifacts = new Map<
   string,
   ReturnType<typeof capturePluginGenerationArtifact>
 >();
+const retainedNativeEsmSourceBuilds = new Map<
+  string,
+  Map<string, ReturnType<typeof buildPluginTypeScriptSource>>
+>();
+
+function nativeEsmSourceBuilds(
+  identity: string | undefined,
+): Map<string, ReturnType<typeof buildPluginTypeScriptSource>> {
+  if (!identity) {
+    return new Map();
+  }
+  const existing = retainedNativeEsmSourceBuilds.get(identity);
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, ReturnType<typeof buildPluginTypeScriptSource>>();
+  retainedNativeEsmSourceBuilds.set(identity, created);
+  return created;
+}
 
 function liveNativeEsmOwners(identity: string): readonly RetainedNativeEsmOwner[] {
   return [...(retainedNativeEsmOwners.get(identity) ?? [])].filter((owner) => owner.accepts());
@@ -159,7 +178,9 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     };
   }
   const nativeHooks = typeof Module.registerHooks === "function";
-  const sourceBuilds = new Map<string, ReturnType<typeof buildPluginTypeScriptSource>>();
+  // Compiled TypeScript lives beside the retained module. A later generation has
+  // to see the same output map, or a helper's old URL no longer resolves.
+  const sourceBuilds = nativeEsmSourceBuilds(nativeEsmIdentity);
   const sourceForOutput = (filename: string): PluginSourceFile => {
     for (const build of sourceBuilds.values()) {
       const source = build.sourceForOutput(filename);
@@ -334,8 +355,15 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   const demandedModules = new Map<string, { url: string } | { error: unknown }>();
   let resolvingPaths = false;
   params.instance.onModuleDispose(() => {
+    if (nativeEsmIdentity && readRetainedNativeEsmModule(nativeEsmIdentity)) {
+      return;
+    }
     for (const build of sourceBuilds.values()) {
       build.dispose();
+    }
+    sourceBuilds.clear();
+    if (nativeEsmIdentity) {
+      retainedNativeEsmSourceBuilds.delete(nativeEsmIdentity);
     }
   });
   const includeSources = (additions: readonly string[]) => {

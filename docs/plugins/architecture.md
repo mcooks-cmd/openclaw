@@ -437,7 +437,9 @@ lifetime, including across configuration revisions of that workspace. Two
 workspaces that load the same installed path do not share the module. A
 workspace the worker has not loaded before evaluates another module, and Node
 keeps it until the worker process exits. Refreshing a workspace reuses its
-module. Each live workspace generation keeps its own execution owner for that
+module and the compiled TypeScript that module already loaded. A later import
+from one of those compiled helpers still resolves after the generation that
+compiled it is released. Each live workspace generation keeps its own execution owner for that
 capture, so a deferred import uses the generation that requested it, including
 after another workspace's generation is released. An import that still names a
 released generation is rejected before capture. An import that does not name a

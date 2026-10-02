@@ -914,6 +914,7 @@ src/infra/worker-transfer-bytes.ts
 src/infra/wsl.ts
 src/infra/zstd-codec.ts
 src/logger.ts
+src/logging.ts
 src/logging/config.ts
 src/logging/console.ts
 src/logging/diagnostic-support-redaction.ts
@@ -1043,6 +1044,7 @@ src/plugins/installed-plugin-record-match.ts
 src/plugins/jiti-factory.ts
 src/plugins/legacy-npm-declaration.ts
 src/plugins/loader-cache-state.ts
+src/plugins/loader-registration-config.ts
 src/plugins/managed-npm-retention-contract.ts
 src/plugins/managed-npm-retention.ts
 src/plugins/management-lifecycle-error.ts
@@ -1186,6 +1188,7 @@ src/plugins/runtime/gateway-request-scope.ts
 src/plugins/runtime/generation-scope.ts
 src/plugins/runtime/generation-state.ts
 src/plugins/runtime/load-context-state.ts
+src/plugins/runtime/load-context.ts
 src/plugins/schema-validator.ts
 src/plugins/sdk-alias-normalization.ts
 src/plugins/sdk-alias-workspace.ts
